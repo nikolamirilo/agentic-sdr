@@ -16,30 +16,54 @@ import {
   inputClass,
 } from "@/components/ui";
 import { StepFrame } from "@/components/wizard/StepFrame";
+import { RunMonitor } from "@/components/wizard/RunMonitor";
+import { RunList, type RunSummaryView } from "@/components/wizard/RunSwitcher";
+import { useRunStream } from "@/components/useRunStream";
 import Link from "next/link";
 
 const MAX_LEADS = 10;
 
 /**
- * The configuration surface stays small on purpose: lead count, skills,
- * anything extra worth reading. The budget controls are real and stay
- * available, but folded away — they are a safeguard, not a decision most runs
- * need to make.
+ * The Research phase: configure a run, then watch it.
+ *
+ * Both halves live here because they are the same phase of the same run. The
+ * configuration surface stays small on purpose — lead count, skills, anything
+ * extra worth reading. The budget controls are real and stay available, but
+ * folded away: they are a safeguard, not a decision most runs need to make.
  */
 export function Step2Research({
   productId,
   profile,
   skills,
+  runId,
+  targetCount: runTargetCount,
+  runs,
   onBack,
   onStarted,
+  onContinue,
+  startConfiguring = false,
 }: {
   productId: string;
   profile: ProductProfile | null;
   skills: Skill[];
+  /** The run being watched, if this phase already has one. */
+  runId: string | undefined;
+  targetCount: number;
+  /** Every run this product has had, so they can be found and reopened. */
+  runs: RunSummaryView[];
   onBack: () => void;
   onStarted: (runId: string, targetCount: number) => void;
+  onContinue: () => void;
+  /** Open on the form even though a run exists — someone asked for a new one. */
+  startConfiguring?: boolean;
 }) {
-  const [targetCount, setTargetCount] = useState(5);
+  const [targetCount, setTargetCount] = useState(runTargetCount || 5);
+  /*
+   * A run already on this phase is something to watch, not something to set up
+   * again, so the form is behind a deliberate "new run" rather than being the
+   * default view of a product that has already been researched.
+   */
+  const [configuring, setConfiguring] = useState(startConfiguring);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [links, setLinks] = useState<string[]>([]);
   const [linkDraft, setLinkDraft] = useState("");
@@ -147,8 +171,57 @@ export function Step2Research({
     }
   }
 
+  /*
+   * Only subscribe while the monitor is on screen. Asking for the stream of a
+   * run you are in the middle of replacing would replay the old run's
+   * transcript underneath the form for the new one.
+   */
+  const watching = Boolean(runId) && !configuring;
+  const stream = useRunStream(watching ? runId : undefined, targetCount);
+  const running = watching && stream.status === "running";
+
+  if (watching && runId) {
+    return (
+      <StepFrame
+        step={2}
+        onBack={onBack}
+        onContinue={onContinue}
+        continueLabel="Review leads"
+        continueHint={running ? "Leads are reviewable as they arrive" : undefined}
+        secondaryAction={
+          <Button
+            variant="secondary"
+            size="lg"
+            onClick={() => setConfiguring(true)}
+            disabled={running}
+            title={running ? "This run is still going" : undefined}
+          >
+            <Icon.Search />
+            New run
+          </Button>
+        }
+      >
+        <RunMonitor
+          runId={runId}
+          stream={stream}
+          running={running}
+          targetCount={targetCount}
+          foundCount={0}
+        />
+        <div className="mt-10">
+          <RunList productId={productId} runs={runs} currentRunId={runId} />
+        </div>
+      </StepFrame>
+    );
+  }
+
   return (
-    <StepFrame step={2} onBack={onBack} hideNav={false}>
+    <StepFrame
+      step={2}
+      /* Backing out of the form returns to the run it was going to replace. */
+      onBack={runId ? () => setConfiguring(false) : onBack}
+      hideNav={false}
+    >
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="space-y-6">
           <Card padding="lg">
@@ -328,6 +401,8 @@ export function Step2Research({
               <p className="mt-2 text-[13px] text-ink-3">No profile loaded.</p>
             )}
           </Card>
+
+          <RunList productId={productId} runs={runs} currentRunId={runId ?? null} />
         </aside>
       </div>
 

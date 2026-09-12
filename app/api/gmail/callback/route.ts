@@ -16,7 +16,7 @@ import { safeInternalPath } from "@/lib/url";
  *
  * Every outcome lands back on the screen the flow started from with a `gmail`
  * query param, so the same connection state is reported in one place whether
- * it was started from settings or from step four.
+ * it was started from settings or from the Outreach step.
  */
 export async function GET(request: Request) {
   if (!gmailConfigured()) return apiError("Gmail is not configured", 503);
@@ -41,9 +41,9 @@ export async function GET(request: Request) {
   }
 
   // Where to land, in order of preference: the screen that started the flow,
-  // then step four of that product's flow.
+  // then the Outreach step of that product's flow.
   const back = (status: string) => {
-    const path = from ?? `/admin/products/${productId}?step=4`;
+    const path = from ?? `/admin/products/${productId}?step=5`;
     return redirectWith(`${path}${path.includes("?") ? "&" : "?"}gmail=${status}`);
   };
 

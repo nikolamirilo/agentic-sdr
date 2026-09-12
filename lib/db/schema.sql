@@ -236,3 +236,35 @@ begin
     execute $sql$alter table skills drop column kind$sql$;
   end if;
 end $$;
+
+-- A run is worked through four phases: research, lead review, communication
+-- generation, outreach. The phase the user last had open is recorded here, so
+-- reopening a run lands on the screen they left rather than at the beginning.
+--
+-- Backfilled exactly once, guarded on the column not existing rather than on
+-- the value: a run the user deliberately navigated back from must not be
+-- dragged forward again by the next deploy.
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = current_schema()
+      and table_name = 'research_runs' and column_name = 'phase'
+  ) then
+    alter table research_runs add column phase text;
+
+    -- Drafts existing means generation is behind it, so the run belongs on
+    -- outreach; leads without drafts means it stopped at the review.
+    update research_runs r set phase = case
+      when exists (
+        select 1 from messages m join leads l on l.id = m.lead_id where l.run_id = r.id
+      ) then 'outreach'
+      when exists (select 1 from leads l where l.run_id = r.id) then 'lead_review'
+      else 'research'
+    end;
+
+    alter table research_runs alter column phase set default 'research';
+    update research_runs set phase = 'research' where phase is null;
+    alter table research_runs alter column phase set not null;
+  end if;
+end $$;

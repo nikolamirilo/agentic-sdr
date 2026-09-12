@@ -280,12 +280,22 @@ export async function listProfileVersions(productId: string): Promise<ProductPro
 
 // --- runs -----------------------------------------------------------------
 
+/**
+ * The four phases a run is worked through, in order. `phase` records the one
+ * the user last had open, which is what makes reopening a run resume rather
+ * than restart; how far a run is *allowed* to go is derived from its data.
+ */
+export const RUN_PHASES = ["research", "lead_review", "comms", "outreach"] as const;
+
+export type RunPhase = (typeof RUN_PHASES)[number];
+
 export type ResearchRun = {
   id: string;
   productId: string;
   profileId: string | null;
   targetCount: number;
   status: "running" | "done" | "partial" | "failed";
+  phase: RunPhase;
   foundCount: number;
   examinedCount: number;
   budgetCandidates: number;
@@ -303,6 +313,7 @@ type RunRow = {
   profile_id: string | null;
   target_count: number;
   status: ResearchRun["status"];
+  phase: RunPhase;
   found_count: number;
   examined_count: number;
   budget_candidates: number;
@@ -314,7 +325,7 @@ type RunRow = {
   finished_at: Date | null;
 };
 
-const RUN_COLUMNS = `id, product_id, profile_id, target_count, status, found_count, examined_count,
+const RUN_COLUMNS = `id, product_id, profile_id, target_count, status, phase, found_count, examined_count,
   budget_candidates, budget_seconds, use_profile, skill_ids, error, started_at, finished_at`;
 
 const toRun = (row: RunRow): ResearchRun => ({
@@ -323,6 +334,7 @@ const toRun = (row: RunRow): ResearchRun => ({
   profileId: row.profile_id,
   targetCount: row.target_count,
   status: row.status,
+  phase: row.phase,
   foundCount: row.found_count,
   examinedCount: row.examined_count,
   budgetCandidates: row.budget_candidates,
@@ -372,6 +384,54 @@ export async function listRuns(productId: string): Promise<ResearchRun[]> {
     [productId]
   );
   return rows.map(toRun);
+}
+
+/**
+ * A run plus the counts the runs list and the phase rail both need.
+ *
+ * The counts are what decide how far a run may be navigated — a run with no
+ * leads has nothing to review, one with no drafts has nothing to send — so they
+ * are fetched with the run rather than by loading every lead of every run.
+ */
+export type RunSummary = ResearchRun & {
+  leadCount: number;
+  messageCount: number;
+  sentCount: number;
+};
+
+type RunSummaryRow = RunRow & {
+  lead_count: string;
+  message_count: string;
+  sent_count: string;
+};
+
+export async function listRunSummaries(productId: string): Promise<RunSummary[]> {
+  const rows = await query<RunSummaryRow>(
+    `select ${RUN_COLUMNS},
+       (select count(*) from leads l where l.run_id = r.id) as lead_count,
+       (select count(*) from messages m
+          join leads l on l.id = m.lead_id
+         where l.run_id = r.id) as message_count,
+       (select count(*) from messages m
+          join leads l on l.id = m.lead_id
+         where l.run_id = r.id and m.status = 'sent') as sent_count
+     from research_runs r
+     where r.product_id = $1
+     order by r.started_at desc
+     limit 50`,
+    [productId]
+  );
+  return rows.map((row) => ({
+    ...toRun(row),
+    leadCount: Number(row.lead_count),
+    messageCount: Number(row.message_count),
+    sentCount: Number(row.sent_count),
+  }));
+}
+
+/** Records where the user is in a run, so reopening it lands on the same screen. */
+export async function setRunPhase(id: string, phase: RunPhase): Promise<void> {
+  await query(`update research_runs set phase = $2 where id = $1`, [id, phase]);
 }
 
 export async function updateRunProgress(

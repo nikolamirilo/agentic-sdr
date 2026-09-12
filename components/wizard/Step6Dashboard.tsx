@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { Lead } from "@/lib/types";
-import type { OutreachMessage } from "@/components/wizard/Step4Outreach";
+import type { OutreachMessage } from "@/components/wizard/Step5Outreach";
 import { Button, Card, Empty, Icon, Pill, RelevanceBadge } from "@/components/ui";
 import { StepFrame } from "@/components/wizard/StepFrame";
 
@@ -23,7 +23,7 @@ type SortKey = "relevance" | "outcome";
  * fill in — this is the record of what the run produced and where each lead got
  * to, and it is the screen you come back to.
  */
-export function Step5Dashboard({
+export function Step6Dashboard({
   leads,
   messages,
   onLeadsChange,
@@ -94,7 +94,7 @@ export function Step5Dashboard({
   }
 
   return (
-    <StepFrame step={5} onBack={onBack} hideNav>
+    <StepFrame step={6} onBack={onBack} hideNav>
       {/* ---------------------------------------------------------- stats */}
       <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile label="Qualified leads" value={leads.length} emphasis />

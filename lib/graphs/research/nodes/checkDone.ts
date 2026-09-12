@@ -29,7 +29,7 @@ export async function checkDone(state: ResearchState): Promise<ResearchUpdate> {
     leads: { used: state.found.length, cap: state.targetCount },
     candidates: { used: state.examinedCount, cap: state.budget.maxCandidates },
     seconds: { used: Math.round(elapsedSeconds), cap: state.budget.maxSeconds },
-    turns: { used: state.iterations, cap: 8 },
+    turns: { used: turn, cap: 5 },
     tokens: usage ? usage.inputTokens + usage.outputTokens : undefined,
     modelCalls: usage?.modelCalls,
     toolCalls: usage?.toolCalls,
@@ -62,7 +62,7 @@ export async function checkDone(state: ResearchState): Promise<ResearchUpdate> {
   }
 
   // A loop that keeps discovering nothing new is not going to start.
-  if (state.iterations >= 8) {
+  if (turn >= 5) {
     return stop("partial", "reached the iteration cap without filling the target");
   }
 

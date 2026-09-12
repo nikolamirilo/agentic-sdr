@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { startResearchRun } from "@/lib/runs/manager";
-import { getProduct, listRuns } from "@/lib/db/queries";
+import { getProduct, listRunSummaries } from "@/lib/db/queries";
 import { apiError, apiOk, handleError, parseBody } from "@/lib/api";
 
 const StartRunSchema = z.object({
@@ -16,7 +16,7 @@ export async function GET(request: Request) {
   const productId = new URL(request.url).searchParams.get("productId");
   if (!productId) return apiError("productId is required", 400);
   try {
-    return apiOk({ runs: await listRuns(productId) });
+    return apiOk({ runs: await listRunSummaries(productId) });
   } catch (error) {
     return handleError(error, "GET /api/runs");
   }

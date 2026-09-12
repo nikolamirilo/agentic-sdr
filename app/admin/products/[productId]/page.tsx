@@ -6,7 +6,7 @@ import {
   listLeadsForRun,
   listMessagesForLeads,
   listProductsWithStatus,
-  listRuns,
+  listRunSummaries,
   listSources,
 } from "@/lib/db/queries";
 import { availableSkills } from "@/lib/skills/registry";
@@ -14,7 +14,12 @@ import { connectedAccount, gmailConfigured } from "@/lib/providers/gmail";
 import { features } from "@/lib/env";
 import { hasModelProvider } from "@/lib/llm";
 import { Wizard, type WizardInitialState } from "@/components/wizard/Wizard";
-import { furthestReachableStep, type StepId } from "@/components/wizard/steps";
+import {
+  TOTAL_STEPS,
+  furthestReachableStep,
+  stepForPhase,
+  type StepId,
+} from "@/components/wizard/steps";
 import type { Lead } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +35,7 @@ export default async function ProductFlow(props: PageProps<"/admin/products/[pro
   const product = await getProduct(productId).catch(() => undefined);
   if (!product) notFound();
 
-  const requestedStep = clampStep(Number(single(params.step) ?? 1));
+  const stepParam = single(params.step);
   const runIdParam = single(params.run);
 
   const [profile, sources, skills, products, runs] = await Promise.all([
@@ -38,7 +43,7 @@ export default async function ProductFlow(props: PageProps<"/admin/products/[pro
     listSources(product.id).catch(() => []),
     availableSkills(undefined, product.id).catch(() => []),
     listProductsWithStatus().catch(() => []),
-    listRuns(product.id).catch(() => []),
+    listRunSummaries(product.id).catch(() => []),
   ]);
 
   // Prefer the run named in the URL; otherwise pick up the most recent one.
@@ -69,16 +74,30 @@ export default async function ProductFlow(props: PageProps<"/admin/products/[pro
 
   /*
    * A step is only offered once the product has the data it reads. That makes
-   * the rail navigable backwards over real progress, and makes `?step=5` on a
+   * the rail navigable backwards over real progress, and makes `?step=6` on a
    * product that never ran land on the last step that has something to show
    * rather than on an empty dashboard.
    */
   const furthest = furthestReachableStep({
     hasProfile: Boolean(profile),
     hasRun: Boolean(runId),
+    hasLeads: leads.length > 0,
     hasMessages: messages.length > 0,
   });
-  const step = (Math.min(requestedStep, furthest) as StepId);
+
+  /*
+   * An explicit `?step=` wins — it is what a refresh carries. Without one, this
+   * is someone entering the run, so they land on the phase they left it at.
+   * A product with no run yet opens on research if it has a profile to search
+   * with, otherwise on the profile.
+   */
+  const resumeStep: StepId = run
+    ? stepForPhase(run.phase)
+    : profile
+      ? 2
+      : 1;
+  const requestedStep = stepParam !== undefined ? clampStep(Number(stepParam)) : resumeStep;
+  const step = Math.min(requestedStep, furthest) as StepId;
 
   const initial: WizardInitialState = {
     step,
@@ -99,6 +118,17 @@ export default async function ProductFlow(props: PageProps<"/admin/products/[pro
       status: source.status,
     })),
     skills,
+    runs: runs.map((item) => ({
+      id: item.id,
+      status: item.status,
+      phase: item.phase,
+      targetCount: item.targetCount,
+      leadCount: item.leadCount,
+      messageCount: item.messageCount,
+      sentCount: item.sentCount,
+      startedAt: item.startedAt,
+      finishedAt: item.finishedAt,
+    })),
     runId,
     targetCount,
     leads,
@@ -129,5 +159,5 @@ function single(value: string | string[] | undefined): string | undefined {
 
 function clampStep(value: number): StepId {
   if (!Number.isFinite(value)) return 1;
-  return Math.min(5, Math.max(1, Math.round(value))) as StepId;
+  return Math.min(TOTAL_STEPS, Math.max(1, Math.round(value))) as StepId;
 }
