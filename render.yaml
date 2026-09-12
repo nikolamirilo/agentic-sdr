@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: product-sdr
+    runtime: node
+    # Free instances spin down when idle and the cold start lands in the middle
+    # of your demo. This is the most common self-inflicted hackathon wound.
+    plan: starter
+    region: oregon
+    buildCommand: npm ci && npm run build
+    # Migrations run before the new instance takes traffic, so a bad migration
+    # fails the deploy rather than the running process.
+    preDeployCommand: npm run migrate
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: NODE_ENV
+        value: production
+      - key: PG_POOL_MAX
+        value: "8"
+      # Everything below is set in the Render dashboard, never committed.
+      - key: DATABASE_URL
+        sync: false
+      - key: XAI_API_KEY
+        sync: false
+      - key: EXA_API_KEY
+        sync: false
+      - key: FIRECRAWL_API_KEY
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: TOKEN_ENCRYPTION_KEY
+        sync: false

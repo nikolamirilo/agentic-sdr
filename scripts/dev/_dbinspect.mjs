@@ -1,0 +1,13 @@
+import pg from "pg";
+import dotenv from "dotenv";
+dotenv.config({ path: ".env.local", quiet: true });
+dotenv.config({ path: ".env", quiet: true });
+const cs = process.env.DATABASE_URL || process.env.NEON_PG_DB_CONNECTION_STRING;
+const u = new URL(cs);
+console.log("host:", u.host, "| db:", u.pathname.slice(1));
+const pool = new pg.Pool({ connectionString: cs, max: 1 });
+const t = await pool.query(`select table_name from information_schema.tables where table_schema='public' order by 1`);
+console.log(`tables (${t.rowCount}):`, t.rows.map(r=>r.table_name).join(", ") || "(none)");
+const e = await pool.query(`select extname from pg_extension order by 1`);
+console.log("extensions:", e.rows.map(r=>r.extname).join(", "));
+await pool.end();

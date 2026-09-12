@@ -1,0 +1,239 @@
+@import "tailwindcss";
+
+/*
+ * SignalFit design system.
+ *
+ * Light and warm rather than dark: an off-white ground, white surfaces, and
+ * near-black headlines carrying the contrast. One muted navy is the only
+ * chromatic colour in the interface, and it is reserved for the primary action
+ * on each step — if navy appears twice on a screen, something is wrong.
+ *
+ * Type does the structural work. Headlines are large and tight; everything else
+ * is quiet. Whitespace between sections is deliberate and should not be tuned
+ * down to fit more in.
+ */
+
+:root {
+  /* ground and surfaces */
+  --ground: #faf9f6;
+  --surface: #ffffff;
+  --surface-sunken: #f5f4f0;
+
+  /* ink */
+  --ink: #0b0b0c;
+  --ink-2: #4e535d;
+  --ink-3: #8b8f98;
+
+  /* lines */
+  --line: #e7e5df;
+  --line-strong: #d5d2ca;
+
+  /* the one accent */
+  --accent: #1c3d6e;
+  --accent-hover: #17335c;
+  --accent-tint: #eef2f8;
+  --accent-line: #c9d6e8;
+
+  /* status, used only for state — never for decoration */
+  --good: #1f7a4d;
+  --good-tint: #e8f4ed;
+  --warn: #8a6110;
+  --warn-tint: #fbf3e2;
+  --bad: #9a2f24;
+  --bad-tint: #fbecea;
+  --info: #1c3d6e;
+  --info-tint: #eef2f8;
+
+  --shadow-card: 0 1px 2px rgba(11, 11, 12, 0.04), 0 1px 1px rgba(11, 11, 12, 0.02);
+  --shadow-raised: 0 4px 16px rgba(11, 11, 12, 0.06), 0 1px 2px rgba(11, 11, 12, 0.04);
+  --shadow-sticky: 0 -8px 24px rgba(11, 11, 12, 0.06);
+}
+
+@theme inline {
+  --color-ground: var(--ground);
+  --color-surface: var(--surface);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-tint: var(--accent-tint);
+  --color-accent-line: var(--accent-line);
+  --color-good: var(--good);
+  --color-good-tint: var(--good-tint);
+  --color-warn: var(--warn);
+  --color-warn-tint: var(--warn-tint);
+  --color-bad: var(--bad);
+  --color-bad-tint: var(--bad-tint);
+  --color-info: var(--info);
+  --color-info-tint: var(--info-tint);
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono-face), ui-monospace, SFMono-Regular, monospace;
+
+  --shadow-card: var(--shadow-card);
+  --shadow-raised: var(--shadow-raised);
+
+  --radius-card: 16px;
+  --radius-control: 10px;
+}
+
+html {
+  background: var(--ground);
+}
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/*
+ * Headlines are the loudest thing on the page, so they are also the tightest.
+ * Large type at 1.6 line-height reads as a paragraph, not a heading.
+ *
+ * These live in @layer components so a utility can still override one of them
+ * at the call site — unlayered rules outrank every layered utility, so the
+ * colour set here would otherwise win against a `text-*` class on the same
+ * element.
+ */
+@layer components {
+  .display {
+    font-size: clamp(2.125rem, 4.5vw, 3.5rem);
+    line-height: 1.04;
+    letter-spacing: -0.03em;
+    font-weight: 600;
+  }
+
+  .headline {
+    font-size: clamp(1.75rem, 3vw, 2.5rem);
+    line-height: 1.1;
+    letter-spacing: -0.025em;
+    font-weight: 600;
+  }
+
+  .subhead {
+    font-size: 1.125rem;
+    line-height: 1.6;
+    color: var(--ink-2);
+  }
+
+  /* The structural device: 01, 02, 03 beside every section heading. */
+  .section-number {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/*
+ * Form controls inherit type and colour from their surroundings — Tailwind's
+ * preflight already does this in @layer base, and it must stay there: an
+ * unlayered `button { color: inherit }` outranks every layered `text-*`
+ * utility, which silently blanks out text colours on buttons.
+ *
+ * Anything clickable says so. Preflight leaves buttons on the default arrow,
+ * which reads as decoration rather than a control. Disabled controls are
+ * excluded so their own not-allowed cursor still shows.
+ */
+@layer base {
+  button:not(:disabled),
+  select:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  summary {
+    cursor: pointer;
+  }
+}
+
+/* One visible focus treatment everywhere, including keyboard-only. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+::selection {
+  background: var(--accent-tint);
+}
+
+@keyframes step-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.step-in {
+  animation: step-in 260ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.row-in {
+  animation: row-in 200ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.pulse-soft {
+  animation: pulse-soft 1.5s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(90deg, var(--surface-sunken) 25%, #ece9e2 50%, var(--surface-sunken) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .step-in,
+  .row-in,
+  .pulse-soft,
+  .shimmer {
+    animation: none;
+  }
+}

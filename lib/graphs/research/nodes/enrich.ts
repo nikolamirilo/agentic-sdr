@@ -1,0 +1,239 @@
+import { z } from "zod";
+import { extractionProvider } from "@/lib/providers/firecrawl";
+import { enrichmentProvider } from "@/lib/providers/enrichment";
+import { linkedInProvider, isLinkedInProfileUrl, renderProfileText } from "@/lib/providers/up2data";
+import { features } from "@/lib/env";
+import { resolveSkills } from "@/lib/skills/registry";
+import { mapWithLimit, DEFAULT_CONCURRENCY } from "@/lib/providers/resilience";
+import { emit } from "@/lib/streaming/runEvents";
+import { computeIdentityKey } from "@/lib/identity";
+import { recordCandidate } from "@/lib/db/queries";
+import { recordToolCall } from "@/lib/llm";
+import type { EnrichedCandidate, ResearchState, ResearchUpdate } from "@/lib/graphs/research/state";
+
+/**
+ * Read the candidate's page, then ask the contact provider for an email.
+ * Batched with a concurrency cap of 5.
+ *
+ * Which reader depends on where the candidate came from. A LinkedIn member page
+ * is the one page Firecrawl cannot read — it is behind an auth wall, and a
+ * scrape of it returns a login screen, not a person — so those go to Up2Data
+ * and everything else goes to Firecrawl. The two never both run on one
+ * candidate: that would be paying twice for the same page.
+ *
+ * A failed read marks the candidate unresolved and the loop continues.
+ * One dead URL must never stop a run.
+ */
+
+const CandidateExtractSchema = z.object({
+  companyName: z.string().optional().describe("The company this page belongs to"),
+  personName: z.string().optional().describe("The individual this page is about, if any"),
+  role: z.string().optional().describe("Their job title, if stated"),
+  whatTheyDo: z.string().optional().describe("What the company does, in one sentence"),
+  recentActivity: z
+    .array(z.string())
+    .default([])
+    .describe("Dated, specific things happening: launches, hires, funding, expansions"),
+  stackSignals: z
+    .array(z.string())
+    .default([])
+    .describe("Named tools, platforms or protocols this company visibly uses"),
+  employeeCountHint: z.string().optional(),
+  contactEmails: z.array(z.string()).default([]).describe("Email addresses printed on the page"),
+});
+
+/** How many candidates we are willing to pay to examine in one turn of the loop. */
+const BATCH_SIZE = 20;
+
+export async function enrich(state: ResearchState): Promise<ResearchUpdate> {
+  await emit(state.runId, "node_start", { node: "enrich" });
+
+  const skills = resolveSkills(state.skills, "research");
+  const extraction = extractionProvider(state.productId);
+  const contacts = enrichmentProvider();
+
+  // Respect the remaining candidate budget: never examine past the cap.
+  const remainingBudget = Math.max(0, state.budget.maxCandidates - state.examinedCount);
+  const batch = state.pending.slice(0, Math.min(BATCH_SIZE, remainingBudget));
+
+  if (batch.length === 0) {
+    return { enriched: [], examinedCount: 0 };
+  }
+
+  await emit(state.runId, "progress", {
+    node: "enrich",
+    label: "Enriching",
+    detail: `${batch.length} in flight`,
+    inFlight: batch.length,
+  });
+
+  const canScrape = skills.allowedTools.has("firecrawl.scrape");
+  const canLookUpContacts = skills.allowedTools.has("enrichment.lookup");
+  const canReadProfiles = features.up2data && skills.allowedTools.has("linkedin.enrichProfile");
+  const canReadCompanies = features.up2data && skills.allowedTools.has("linkedin.enrichCompany");
+  const linkedin = linkedInProvider(state.productId);
+
+  const results = await mapWithLimit(batch, DEFAULT_CONCURRENCY, async (candidate) => {
+    let pageText = candidate.snippet ?? "";
+    let extracted: z.infer<typeof CandidateExtractSchema> | undefined;
+    const evidence: Record<string, unknown> = { ...(candidate.evidence ?? {}) };
+    const activity: string[] = [];
+    let fullName = candidate.fullName;
+    let company = candidate.company;
+    let companyDomain = candidate.companyDomain;
+    let role = candidate.role;
+
+    const memberUrl = isLinkedInProfileUrl(candidate.sourceUrl) ? candidate.sourceUrl : undefined;
+
+    if (memberUrl && canReadProfiles) {
+      const profile = await linkedin.enrichProfile(memberUrl);
+      if (profile) {
+        fullName = profile.fullName ?? fullName;
+        company = profile.company ?? company;
+        role = profile.role ?? role;
+        pageText = [renderProfileText(profile), candidate.snippet]
+          .filter(Boolean)
+          .join("\n\n")
+          .slice(0, 12_000);
+        evidence.linkedInProfile = {
+          headline: profile.headline,
+          location: profile.location,
+          startedAt: profile.startedAt,
+          followersCount: profile.followersCount,
+          scrapedAt: profile.scrapedAt,
+        };
+        evidence.companyLinkedInId = profile.companyLinkedInId ?? evidence.companyLinkedInId;
+        // Tenure is the fact worth surfacing: someone eight weeks into the job
+        // is a different conversation from someone eight years in.
+        if (profile.startedAt && profile.role) {
+          activity.push(`${profile.role}${profile.company ? ` at ${profile.company}` : ""} since ${profile.startedAt}`);
+        }
+      }
+    } else if (canScrape && !memberUrl) {
+      const scraped = await extraction.scrape<z.infer<typeof CandidateExtractSchema>>(
+        candidate.sourceUrl,
+        CandidateExtractSchema,
+        { prompt: "Extract who this company is, what they do, and what is happening there now." }
+      );
+      extracted = scraped.json;
+      fullName = extracted?.personName ?? fullName;
+      company = extracted?.companyName ?? company;
+      role = extracted?.role ?? role;
+      activity.push(...(extracted?.recentActivity ?? []));
+      pageText = [scraped.markdown, candidate.snippet].filter(Boolean).join("\n\n").slice(0, 12_000);
+    }
+
+    /**
+     * A LinkedIn person arrives with a company name and no website, because the
+     * search does not carry one. One company call fixes that: it returns the
+     * domain everything downstream keys on — identity, contact lookup, the
+     * exclusion list — plus a headcount that is current rather than quarterly.
+     * Skipped when we already have a domain, which is every Firecrawl candidate.
+     */
+    const orgId = typeof evidence.companyLinkedInId === "string" ? evidence.companyLinkedInId : undefined;
+    if (canReadCompanies && orgId && !companyDomain) {
+      const org = await linkedin.enrichCompany({ linkedinId: orgId });
+      if (org) {
+        company = org.name ?? company;
+        companyDomain = org.domain ?? companyDomain;
+        evidence.linkedInCompany = {
+          url: org.url,
+          website: org.website,
+          industry: org.industry,
+          headcount: org.headcount,
+          headcountGrowth6m: org.headcountGrowth6m,
+          hq: org.hq,
+          founded: org.founded,
+          specialties: org.specialties,
+          fundingTotalUsd: org.fundingTotalUsd,
+          lastRound: org.lastRound,
+        };
+        if (org.description) evidence.whatTheyDo = org.description.slice(0, 600);
+        if (org.headcount) evidence.employeeCountHint = `${org.headcount} employees on LinkedIn`;
+        if (org.headcountGrowth6m && org.headcountGrowth6m > 0) {
+          activity.push(`Headcount up ${Math.round(org.headcountGrowth6m * 100)}% in six months`);
+        }
+        if (org.lastRound?.type) {
+          activity.push(
+            `${org.lastRound.type}${org.lastRound.date ? ` in ${org.lastRound.date}` : ""}`
+          );
+        }
+      }
+    }
+
+    const merged: EnrichedCandidate = {
+      ...candidate,
+      fullName,
+      company,
+      companyDomain,
+      role,
+      pageText,
+      evidence: {
+        ...evidence,
+        whatTheyDo: extracted?.whatTheyDo ?? evidence.whatTheyDo,
+        recentActivity: activity,
+        stackSignals: extracted?.stackSignals ?? [],
+        employeeCountHint: extracted?.employeeCountHint ?? evidence.employeeCountHint,
+      },
+      contactResolved: Boolean(candidate.email),
+    };
+
+    if (!merged.email && canLookUpContacts) {
+      const contact = await contacts.enrich(merged, { markdown: pageText }).catch(() => undefined);
+      if (contact?.email) {
+        merged.email = contact.email;
+        merged.phone = contact.phone ?? merged.phone;
+        merged.contactResolved = true;
+        merged.evidence = { ...merged.evidence, contactProvider: contact.provider };
+        // A resolved email is a stronger identity than the URL we started from.
+        merged.identityKey =
+          computeIdentityKey({ email: contact.email }) ?? merged.identityKey;
+      }
+    }
+
+    return merged;
+  });
+
+  const enriched: EnrichedCandidate[] = [];
+  const errors: string[] = [];
+  let unresolved = 0;
+
+  for (const [index, result] of results.entries()) {
+    const candidate = batch[index];
+    if (!result.ok) {
+      unresolved += 1;
+      const message = (result.error as Error).message;
+      errors.push(`enrich: ${candidate.sourceUrl} failed (${message})`);
+      await recordCandidate({
+        runId: state.runId,
+        productId: state.productId,
+        identityKey: candidate.identityKey,
+        sourceUrl: candidate.sourceUrl,
+        raw: candidate,
+        verdict: "unresolved",
+        reason: `enrichment failed: ${message}`,
+      });
+      continue;
+    }
+    enriched.push(result.value);
+  }
+
+  await recordToolCall(state.runId, batch.length);
+
+  await emit(state.runId, "progress", {
+    node: "enrich",
+    label: "Enriching",
+    detail: `${enriched.length} enriched, ${unresolved} unresolved`,
+    enriched: enriched.length,
+    unresolved,
+    contactsResolved: enriched.filter((c) => c.contactResolved).length,
+  });
+
+  // The candidates we did not take this turn stay queued for the next one.
+  return {
+    enriched,
+    pending: state.pending.slice(batch.length),
+    examinedCount: batch.length,
+    errors,
+  };
+}
