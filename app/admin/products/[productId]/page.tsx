@@ -14,7 +14,7 @@ import { connectedAccount, gmailConfigured } from "@/lib/providers/gmail";
 import { features } from "@/lib/env";
 import { hasModelProvider } from "@/lib/llm";
 import { Wizard, type WizardInitialState } from "@/components/wizard/Wizard";
-import type { StepId } from "@/components/wizard/steps";
+import { furthestReachableStep, type StepId } from "@/components/wizard/steps";
 import type { Lead } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +30,7 @@ export default async function ProductFlow(props: PageProps<"/admin/products/[pro
   const product = await getProduct(productId).catch(() => undefined);
   if (!product) notFound();
 
-  const step = clampStep(Number(single(params.step) ?? 1));
+  const requestedStep = clampStep(Number(single(params.step) ?? 1));
   const runIdParam = single(params.run);
 
   const [profile, sources, skills, products, runs] = await Promise.all([
@@ -67,8 +67,22 @@ export default async function ProductFlow(props: PageProps<"/admin/products/[pro
     !features.firecrawl && "FIRECRAWL_API_KEY",
   ].filter(Boolean) as string[];
 
+  /*
+   * A step is only offered once the product has the data it reads. That makes
+   * the rail navigable backwards over real progress, and makes `?step=5` on a
+   * product that never ran land on the last step that has something to show
+   * rather than on an empty dashboard.
+   */
+  const furthest = furthestReachableStep({
+    hasProfile: Boolean(profile),
+    hasRun: Boolean(runId),
+    hasMessages: messages.length > 0,
+  });
+  const step = (Math.min(requestedStep, furthest) as StepId);
+
   const initial: WizardInitialState = {
     step,
+    furthest,
     product: { id: product.id, name: product.name, websiteUrl: product.websiteUrl },
     products: products.map((item) => ({
       id: item.id,

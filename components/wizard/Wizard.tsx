@@ -21,6 +21,8 @@ import { Notice } from "@/components/ui";
 
 export type WizardInitialState = {
   step: StepId;
+  /** The last step this product has the data for; the rail locks past it. */
+  furthest: StepId;
   product: ProductSummary;
   products: ProductSummary[];
   profile: ProductProfile | null;
@@ -46,7 +48,15 @@ export function Wizard({ initial }: { initial: WizardInitialState }) {
   const productId = initial.product.id;
 
   const [step, setStep] = useState<StepId>(initial.step);
-  const [furthest, setFurthest] = useState<StepId>(initial.step);
+  /*
+   * Seeded from what the product has already done rather than from the step
+   * being shown, so the rail stays navigable after a refresh. `initial.step` is
+   * the floor only because the server clamps it to this already — a step being
+   * shown is by definition reachable.
+   */
+  const [furthest, setFurthest] = useState<StepId>(
+    initial.furthest > initial.step ? initial.furthest : initial.step
+  );
 
   const [profile, setProfile] = useState<ProductProfile | null>(initial.profile);
   // Skills are editable from step two, so they live here rather than on props.
@@ -122,7 +132,13 @@ export function Wizard({ initial }: { initial: WizardInitialState }) {
     setLeads([]);
     setMessages([]);
     setStep(3);
-    setFurthest((prev) => (prev > 3 ? prev : 3));
+    /*
+     * Down as well as up. A new run drops the leads and drafts the last one
+     * produced, so the later steps have nothing to show until this run gets
+     * there — leaving them open would hand back the empty step the rail exists
+     * to keep out of reach.
+     */
+    setFurthest(3);
     syncUrl({ step: 3, runId: newRunId });
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   }
