@@ -75,6 +75,7 @@ export function GmailSettings({
   status: GmailCallbackStatus | null;
 }) {
   const router = useRouter();
+  /** Keyed by product, not by account: an unconnected row has no account id. */
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
 
@@ -85,7 +86,7 @@ export function GmailSettings({
     );
     if (!ok) return;
 
-    setBusy(row.accountId);
+    setBusy(row.productId);
     setError("");
     try {
       const response = await fetch("/api/gmail/disconnect", {
@@ -160,7 +161,7 @@ export function GmailSettings({
                   </div>
 
                   <div className="flex shrink-0 items-center gap-2">
-                    {busy === row.accountId ? (
+                    {busy === row.productId ? (
                       <Spinner className="h-4 w-4 text-ink-3" />
                     ) : (
                       <>

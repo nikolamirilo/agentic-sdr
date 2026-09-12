@@ -177,8 +177,24 @@ export function Step5Dashboard({
                       </td>
                       <td className="px-6 py-4 align-top">
                         {message ? (
-                          <Pill tone={message.status === "sent" ? "good" : message.status === "failed" ? "bad" : "neutral"}>
-                            {message.status === "sent" ? "Sent" : message.status === "failed" ? "Failed" : "Draft"}
+                          <Pill
+                            tone={
+                              message.status === "sent"
+                                ? "good"
+                                : message.status === "failed"
+                                  ? "bad"
+                                  : message.status === "approved"
+                                    ? "accent"
+                                    : "neutral"
+                            }
+                          >
+                            {message.status === "sent"
+                              ? "Sent"
+                              : message.status === "failed"
+                                ? "Failed"
+                                : message.status === "approved"
+                                  ? "Approved"
+                                  : "Draft"}
                           </Pill>
                         ) : (
                           <span className="text-[13px] text-ink-3">—</span>

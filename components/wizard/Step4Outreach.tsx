@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Lead } from "@/lib/types";
 import {
   Button,
@@ -54,6 +54,16 @@ type DraftProgress = {
   outcome?: { label: string; failed: boolean; detail: string };
 };
 
+/** Newly drafted messages win; everything else on screen is kept. */
+function merge(prev: OutreachMessage[], incoming: OutreachMessage[]): OutreachMessage[] {
+  const ids = new Set(incoming.map((message) => message.id));
+  const leadIds = new Set(incoming.map((message) => message.leadId));
+  return [
+    ...incoming,
+    ...prev.filter((message) => !ids.has(message.id) && !leadIds.has(message.leadId)),
+  ];
+}
+
 /** One line per node, so a repeated node updates rather than piles up. */
 function upsertStep(steps: DraftStep[], step: DraftStep): DraftStep[] {
   const at = steps.findIndex((s) => s.node === step.node);
@@ -83,7 +93,10 @@ export function Step4Outreach({
   selectedLeadIds: string[];
   messages: OutreachMessage[];
   gmail: GmailStatus;
-  onMessagesChange: (messages: OutreachMessage[]) => void;
+  /** Accepts an updater so a second drafting batch can merge with the first. */
+  onMessagesChange: (
+    messages: OutreachMessage[] | ((prev: OutreachMessage[]) => OutreachMessage[])
+  ) => void;
   onBack: () => void;
   onContinue: () => void;
 }) {
@@ -96,33 +109,43 @@ export function Step4Outreach({
    * indistinguishable from a hang, and the reason this step felt broken.
    */
   const [feed, setFeed] = useState<DraftProgress[]>([]);
-  const requested = useRef(false);
+  /**
+   * The leads drafting has already been asked for. A set rather than a single
+   * flag: leads can arrive after this step mounts, and a boolean would either
+   * fire the request before they are there or never fire it again afterwards.
+   */
+  const attempted = useRef(new Set<string>());
 
   const leadsById = new Map(leads.map((lead) => [lead.id, lead]));
   const approved = selectedLeadIds.filter((id) => leadsById.has(id));
 
-  const relevant = messages.filter(
-    (message) => approved.includes(message.leadId) && !skipped.includes(message.id)
+  /*
+   * One card per lead: a re-drafted lead has more than one message row, and
+   * `listMessagesForLeads` returns them newest first.
+   */
+  const relevant = messages
+    .filter((message) => approved.includes(message.leadId) && !skipped.includes(message.id))
+    .filter(
+      (message, index, all) => all.findIndex((other) => other.leadId === message.leadId) === index
+    );
+
+  const undrafted = approved.filter(
+    (leadId) => !messages.some((message) => message.leadId === leadId)
   );
 
-  // Draft once on arrival, for any selected lead that has no message yet.
-  useEffect(() => {
-    if (requested.current) return;
-    const missing = approved.filter(
-      (leadId) => !messages.some((message) => message.leadId === leadId)
-    );
-    if (missing.length === 0) return;
+  const draftFor = useCallback(
+    async (leadIds: string[]) => {
+      if (leadIds.length === 0) return;
+      for (const leadId of leadIds) attempted.current.add(leadId);
 
-    requested.current = true;
-    setDrafting(true);
-    setError("");
+      setDrafting(true);
+      setError("");
 
-    void (async () => {
       try {
         const response = await fetch("/api/outreach", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ leadIds: missing }),
+          body: JSON.stringify({ leadIds }),
         });
 
         if (!response.ok) {
@@ -141,7 +164,7 @@ export function Step4Outreach({
                   leadId,
                   leadName: String(data.leadName ?? "lead"),
                   index: Number(data.index ?? prev.length + 1),
-                  total: Number(data.total ?? missing.length),
+                  total: Number(data.total ?? leadIds.length),
                   steps: [],
                 },
               ]);
@@ -184,7 +207,7 @@ export function Step4Outreach({
                         leadId,
                         leadName: String(data.leadName ?? "lead"),
                         index: prev.length + 1,
-                        total: missing.length,
+                        total: leadIds.length,
                         steps: [],
                         outcome,
                       },
@@ -194,11 +217,13 @@ export function Step4Outreach({
             }
 
             case "done": {
-              onMessagesChange(data.messages as OutreachMessage[]);
+              // Merge, not replace: this frame only carries the batch that was
+              // just drafted, and replacing would drop every earlier draft.
+              onMessagesChange((prev) => merge(prev, data.messages as OutreachMessage[]));
               const failures = (data.drafted as Array<{ error?: string }>).filter((i) => i.error);
               if (failures.length > 0) {
                 setError(
-                  `${failures.length} of ${missing.length} could not be drafted: ${failures[0].error}`
+                  `${failures.length} of ${leadIds.length} could not be drafted: ${failures[0].error}`
                 );
               }
               break;
@@ -213,8 +238,31 @@ export function Step4Outreach({
       } finally {
         setDrafting(false);
       }
-    })();
-  }, [approved, messages, onMessagesChange]);
+    },
+    [onMessagesChange]
+  );
+
+  /**
+   * Drafting starts on its own, for every approved lead that has no message yet.
+   * Keyed on the lead ids rather than run once on mount: the leads this step
+   * draws on are fetched on step three, so an empty first render is normal.
+   */
+  const pending = undrafted.filter((leadId) => !attempted.current.has(leadId));
+  const pendingKey = pending.join(",");
+
+  useEffect(() => {
+    if (drafting || pendingKey === "") return;
+    void draftFor(pendingKey.split(","));
+    // pendingKey is the identity of the batch; the array itself is new each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingKey, drafting]);
+
+  /** Lets a failed batch be asked for again; `attempted` would otherwise block it. */
+  function retry() {
+    for (const leadId of undrafted) attempted.current.delete(leadId);
+    setFeed([]);
+    setError("");
+  }
 
   function replace(next: OutreachMessage) {
     onMessagesChange(messages.map((message) => (message.id === next.id ? next : message)));
@@ -260,12 +308,21 @@ export function Step4Outreach({
             </a>
           </>
         )}
-        <span className="text-[13px] text-ink-3">Scope is send-only. Drafts are never sent automatically.</span>
+        <span className="text-[13px] text-ink-3">
+          {gmail.configured && gmail.connectedEmail
+            ? "Scope is send-only. Drafts are never sent automatically."
+            : "Drafts are written and reviewed here either way. Connect Gmail to send them from the app; until then you can copy them out."}
+        </span>
       </div>
 
       {error && (
-        <div className="mb-6">
+        <div className="mb-6 space-y-3">
           <Notice tone="bad">{error}</Notice>
+          {!drafting && undrafted.length > 0 && (
+            <Button variant="secondary" onClick={retry}>
+              Try again
+            </Button>
+          )}
         </div>
       )}
 
@@ -296,6 +353,7 @@ export function Step4Outreach({
               key={message.id}
               message={message}
               lead={lead}
+              productId={productId}
               canSend={gmail.configured && Boolean(gmail.connectedEmail)}
               onChanged={replace}
               onSkip={() => setSkipped((prev) => [...prev, message.id])}
@@ -304,7 +362,27 @@ export function Step4Outreach({
         })}
       </div>
 
-      {!drafting && relevant.length === 0 && !error && (
+      {/*
+        Undrafted leads with drafting idle means the automatic pass did not cover
+        them — a batch that failed, or leads selected after it ran. Asking is
+        better than a step that silently shows fewer drafts than leads.
+      */}
+      {!drafting && !error && undrafted.length > 0 && (
+        <Card padding="lg">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <p className="text-[15px] text-ink-2">
+              {undrafted.length} selected lead{undrafted.length === 1 ? " has" : "s have"} no draft
+              yet.
+            </p>
+            <Button variant="primary" onClick={retry}>
+              <Icon.Spark />
+              Write {undrafted.length} message{undrafted.length === 1 ? "" : "s"}
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {!drafting && approved.length === 0 && !error && (
         <Card padding="lg">
           <p className="text-[15px] text-ink-2">
             No drafts to review. Go back to step three and select the leads you want to write to.
@@ -423,15 +501,22 @@ function LeadProgressCard({ lead }: { lead: DraftProgress }) {
   );
 }
 
+/**
+ * A draft is reviewable whether or not Gmail is connected. Sending is the only
+ * thing the connector gates: without it the draft is still written, still
+ * editable, still approvable, and can be copied out and sent by hand.
+ */
 function MessageCard({
   message,
   lead,
+  productId,
   canSend,
   onChanged,
   onSkip,
 }: {
   message: OutreachMessage;
   lead: Lead;
+  productId: string;
   canSend: boolean;
   onChanged: (message: OutreachMessage) => void;
   onSkip: () => void;
@@ -440,23 +525,27 @@ function MessageCard({
   const [subject, setSubject] = useState(message.subject);
   const [body, setBody] = useState(message.body);
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
 
   const sent = message.status === "sent";
+  const isApproved = message.status === "approved";
+  const sendable = canSend && Boolean(lead.email);
   const blocker = !lead.email
-    ? "This lead has no resolved email address."
+    ? "This lead has no resolved email address, so it can only be copied out."
     : !canSend
-      ? "Connect a Gmail account to send."
+      ? "Gmail is not connected, so sending from here is off."
       : null;
 
-  async function approve() {
+  /** `send: false` records the decision without waking the graph's send node. */
+  async function approve(send: boolean) {
     setBusy(true);
     setError("");
     try {
       const response = await fetch(`/api/messages/${message.id}/approve`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ approved: true, subject, body, send: true }),
+        body: JSON.stringify({ approved: true, subject, body, send }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Approval failed");
@@ -469,14 +558,28 @@ function MessageCard({
     }
   }
 
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(`Subject: ${subject}\n\n${body}`);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError("The browser would not give access to the clipboard.");
+    }
+  }
+
   return (
     <Card padding="none">
       <div className="grid gap-0 lg:grid-cols-[minmax(0,1fr)_18rem]">
         {/* ------------------------------------------------------- message */}
         <div className="min-w-0 p-6">
           <div className="mb-4 flex flex-wrap items-center gap-2">
-            <Pill tone={sent ? "good" : message.status === "failed" ? "bad" : "neutral"}>
-              {sent ? "Sent" : message.status === "failed" ? "Failed" : "Draft"}
+            <Pill
+              tone={
+                sent ? "good" : message.status === "failed" ? "bad" : isApproved ? "accent" : "neutral"
+              }
+            >
+              {sent ? "Sent" : message.status === "failed" ? "Failed" : isApproved ? "Approved" : "Draft"}
             </Pill>
             <Pill tone="accent">{message.angle.type}</Pill>
             {message.critique && (
@@ -518,14 +621,26 @@ function MessageCard({
           <div className="mt-5 flex flex-wrap items-center gap-2">
             {!sent && (
               <>
-                <Button
-                  variant="primary"
-                  onClick={approve}
-                  disabled={busy || Boolean(blocker)}
-                  title={blocker ?? undefined}
-                >
-                  {busy ? <Spinner className="h-4 w-4" /> : <Icon.Check />}
-                  Approve and send
+                {sendable ? (
+                  <Button variant="primary" onClick={() => approve(true)} disabled={busy}>
+                    {busy ? <Spinner className="h-4 w-4" /> : <Icon.Mail />}
+                    {isApproved ? "Send now" : "Approve and send"}
+                  </Button>
+                ) : (
+                  <Button
+                    variant="primary"
+                    onClick={() => approve(false)}
+                    disabled={busy || isApproved}
+                    title={blocker ?? undefined}
+                  >
+                    {busy ? <Spinner className="h-4 w-4" /> : <Icon.Check />}
+                    {isApproved ? "Approved" : "Approve draft"}
+                  </Button>
+                )}
+
+                <Button variant="secondary" onClick={copy}>
+                  <Icon.Document />
+                  {copied ? "Copied" : "Copy"}
                 </Button>
 
                 {editing ? (
@@ -560,7 +675,19 @@ function MessageCard({
               </p>
             )}
 
-            {blocker && !sent && <span className="text-[13px] text-ink-3">{blocker}</span>}
+            {blocker && !sent && (
+              <span className="flex items-center gap-2 text-[13px] text-ink-3">
+                {blocker}
+                {!canSend && lead.email && (
+                  <a
+                    href={`/api/gmail/connect?productId=${productId}`}
+                    className="font-medium text-accent hover:underline"
+                  >
+                    Connect Gmail
+                  </a>
+                )}
+              </span>
+            )}
           </div>
         </div>
 
@@ -582,10 +709,24 @@ function MessageCard({
             <p className="text-[13px] leading-relaxed text-ink">{lead.signal}</p>
           </div>
 
-          <div className="mt-5">
-            <p className="section-number mb-1.5">ANGLE</p>
-            <p className="text-[13px] leading-relaxed text-ink-2">{message.angle.reason}</p>
-            <p className="mt-2 text-[13px] leading-relaxed text-ink-2">{message.angle.benefit}</p>
+          {/*
+            The three parameters the angle node derived from the profile and the
+            lead's signal. Named rather than run together, because they are what
+            the operator is actually reviewing when they read the draft.
+          */}
+          <div className="mt-5 space-y-3">
+            <div>
+              <p className="section-number mb-1.5">TYPE OF COMMUNICATION</p>
+              <p className="text-[13px] leading-relaxed text-ink">{message.angle.type}</p>
+            </div>
+            <div>
+              <p className="section-number mb-1.5">REASON FOR OUTREACH</p>
+              <p className="text-[13px] leading-relaxed text-ink-2">{message.angle.reason}</p>
+            </div>
+            <div>
+              <p className="section-number mb-1.5">BENEFIT OF COLLABORATION</p>
+              <p className="text-[13px] leading-relaxed text-ink-2">{message.angle.benefit}</p>
+            </div>
           </div>
 
           <div className="mt-5 space-y-1.5 border-t border-line pt-4 text-[13px]">
