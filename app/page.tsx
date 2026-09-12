@@ -149,12 +149,12 @@ export default function Root() {
         <div className="mx-auto flex h-16 w-full max-w-[76rem] items-center justify-between gap-4 px-6 lg:px-10">
           <Link href="/" className="flex items-center gap-2.5">
             <Image
-              src="/logo.png"
+              src="/logo-2.png"
               alt=""
-              width={24}
-              height={24}
+              width={32}
+              height={32}
               priority
-              className="h-6 w-6 rounded-[7px] object-contain"
+              className="h-8 w-8 rounded-[7px] object-contain"
             />
             <span className="text-[15px] font-semibold tracking-[-0.01em]">SignalFit</span>
           </Link>
