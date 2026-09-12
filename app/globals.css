@@ -49,6 +49,29 @@
   --shadow-sticky: 0 -8px 24px rgba(11, 11, 12, 0.06);
 }
 
+/*
+ * A scoped inversion for the odd section that should read as a dark band on an
+ * otherwise light page. Every component already reads colour through the
+ * tokens above via `@theme inline`, which keeps those references live rather
+ * than baking in a value — so re-pointing the tokens inside this class is
+ * enough to flip an entire section (cards, pills, borders included) without
+ * touching component markup.
+ */
+.on-dark {
+  --surface: #1e2024;
+  --surface-sunken: #17181c;
+  --ink: #f5f4f0;
+  --ink-2: #c3c6cc;
+  --ink-3: #83868f;
+  --line: #2b2d33;
+  --line-strong: #3d4048;
+  --accent: #6f9bdc;
+  --accent-hover: #86aee0;
+  --accent-tint: #1b2942;
+  --accent-line: #2d3f5c;
+  color-scheme: dark;
+}
+
 @theme inline {
   --color-ground: var(--ground);
   --color-surface: var(--surface);
@@ -229,11 +252,65 @@ body {
   animation: shimmer 1.4s linear infinite;
 }
 
+/* Gentle vertical drift for the hero's stacked-layer illustration. */
+@keyframes float-soft {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.float-soft {
+  animation: float-soft 5s ease-in-out infinite;
+}
+
+/* Rings expanding outward and fading from the hero's signal illustration. */
+@keyframes ring-pulse {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+}
+
+.ring-pulse {
+  animation: ring-pulse 3.2s cubic-bezier(0.3, 0, 0.4, 1) infinite;
+}
+
+/* A signal travelling along the research loop's track, left edge to right. */
+@keyframes travel {
+  0% {
+    left: 0%;
+    opacity: 0;
+  }
+  8%,
+  92% {
+    opacity: 1;
+  }
+  100% {
+    left: 100%;
+    opacity: 0;
+  }
+}
+
+.travel {
+  animation: travel 3.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .step-in,
   .row-in,
   .pulse-soft,
-  .shimmer {
+  .shimmer,
+  .float-soft,
+  .travel,
+  .ring-pulse {
     animation: none;
   }
 }
