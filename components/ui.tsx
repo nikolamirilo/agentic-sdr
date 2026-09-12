@@ -163,6 +163,11 @@ export const IconGear = Icon.Gear;
 export const IconMail = Icon.Mail;
 export const IconWarning = Icon.Warning;
 export const IconTrash = Icon.Trash;
+export const IconDocument = Icon.Document;
+export const IconUpload = Icon.Upload;
+export const IconSearch = Icon.Search;
+export const IconPencil = Icon.Pencil;
+export const IconSliders = Icon.Sliders;
 
 /* --------------------------------------------------------------- buttons */
 
