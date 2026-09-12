@@ -199,3 +199,25 @@ create table if not exists storage_objects (
   body         bytea not null,
   created_at   timestamptz not null default now()
 );
+
+-- Tool names were collapsed from nine fine-grained verbs to four capabilities,
+-- with the action passed as a parameter. Fold any saved allowlist forward.
+-- Idempotent: rows already using the new names are left alone.
+update skills
+set tool_allowlist = (
+  select coalesce(array_agg(distinct mapped), '{}')
+  from unnest(tool_allowlist) as old(name)
+  cross join lateral (
+    select case
+      when old.name like 'exa.%'        then 'exoSearch'
+      when old.name like 'firecrawl.%'  then 'firecrawlSearch'
+      when old.name like 'linkedin.%'   then 'linkedinSearch'
+      when old.name = 'enrichment.lookup' then 'contactLookup'
+      else old.name
+    end
+  ) as m(mapped)
+)
+where exists (
+  select 1 from unnest(tool_allowlist) as t(name)
+  where t.name like '%.%'
+);

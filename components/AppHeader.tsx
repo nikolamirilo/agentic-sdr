@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Icon } from "@/components/ui";
@@ -17,9 +18,14 @@ export function AppHeader({ right, skillsFrom }: { right?: ReactNode; skillsFrom
   return (
     <div className="flex h-16 items-center justify-between gap-4">
       <Link href="/admin" className="flex items-center gap-2.5">
-        <span className="flex h-6 w-6 items-center justify-center rounded-[7px] bg-accent text-white">
-          <Icon.Spark className="h-3.5 w-3.5" />
-        </span>
+        <Image
+          src="/logo.png"
+          alt=""
+          width={24}
+          height={24}
+          priority
+          className="h-6 w-6 rounded-[7px] object-contain"
+        />
         <span className="text-[15px] font-semibold tracking-[-0.01em]">SignalFit</span>
       </Link>
       <div className="flex items-center gap-3">

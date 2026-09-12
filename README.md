@@ -150,10 +150,16 @@ The defaults in `lib/skills/defaults.ts` are seeded on boot, but only once each:
 `seeded_skills` table records which slugs have been planted, so a skill you edit survives a
 restart, one you delete stays deleted, and a default added to the code later still arrives.
 
-Skills are created, edited and deleted from **Manage** on step two, or through the API. A
-skill is global (offered for every product) or scoped to one product; the defaults are
-global. Editing a skill never rewrites a run that already used it — runs resolve their
-skills at entry and keep what they resolved.
+Skills are managed at `/admin/skills` — reachable from **Skills** in the header on every
+screen, and from **Manage** next to the picker on step two. The list filters by kind and
+searches names and instructions; each skill opens on its own page at
+`/admin/skills/:id`, where it is edited and deleted. Links out of the flow carry a `from`
+path so the way back is one click.
+
+A skill is global (offered for every product) or scoped to one product. That is a choice on
+create and fixed afterwards, since moving one would silently change which runs can see it;
+the defaults are global. Editing a skill never rewrites a run that already used it — runs
+resolve their skills at entry and keep what they resolved.
 
 ---
 

@@ -19,7 +19,7 @@ export const DEFAULT_SKILLS: SkillSeed[] = [
     slug: "hiring-signals",
     name: "Find hiring signals",
     kind: "research",
-    toolAllowlist: ["exa.search", "exa.findSimilar", "firecrawl.scrape", "firecrawl.map"],
+    toolAllowlist: ["exoSearch", "firecrawlSearch"],
     instructions: `Prioritise companies that are visibly hiring for roles adjacent to the problem this product solves.
 
 - Write queries around job posts, careers pages and recruiter activity, not around generic company descriptions.
@@ -31,7 +31,7 @@ export const DEFAULT_SKILLS: SkillSeed[] = [
     slug: "tech-stack-fit",
     name: "Match on tech stack",
     kind: "research",
-    toolAllowlist: ["exa.search", "firecrawl.scrape", "firecrawl.map"],
+    toolAllowlist: ["exoSearch", "firecrawlSearch"],
     instructions: `Qualify on observable tooling rather than on stated intent.
 
 - Look for stack evidence in engineering blogs, docs, status pages, integration directories and job descriptions.
@@ -42,7 +42,7 @@ export const DEFAULT_SKILLS: SkillSeed[] = [
     slug: "funding-and-growth",
     name: "Follow funding and growth",
     kind: "research",
-    toolAllowlist: ["exa.search", "exa.findSimilar", "firecrawl.scrape"],
+    toolAllowlist: ["exoSearch", "firecrawlSearch"],
     instructions: `Target companies in a spending window.
 
 - Weight recent funding rounds, headcount growth, new market entries and new office openings.
@@ -54,13 +54,7 @@ export const DEFAULT_SKILLS: SkillSeed[] = [
     slug: "linkedin-buyers",
     name: "Source buyers on LinkedIn",
     kind: "research",
-    toolAllowlist: [
-      "linkedin.searchPeople",
-      "linkedin.enrichProfile",
-      "linkedin.enrichCompany",
-      "exa.search",
-      "firecrawl.scrape",
-    ],
+    toolAllowlist: ["linkedinSearch", "exoSearch", "firecrawlSearch"],
     instructions: `Go after the person, not the company page.
 
 - The LinkedIn facets are the primary source here: pick the two or three job titles the buyer

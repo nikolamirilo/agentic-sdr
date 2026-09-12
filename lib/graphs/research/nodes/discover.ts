@@ -1,10 +1,8 @@
-import { discoveryProvider } from "@/lib/providers/exa";
-import { linkedInProvider, describeFilters } from "@/lib/providers/up2data";
-import { features } from "@/lib/env";
+import { describeFilters } from "@/lib/providers/up2data";
 import { resolveSkills } from "@/lib/skills/registry";
 import { mapWithLimit, DEFAULT_CONCURRENCY } from "@/lib/providers/resilience";
 import { emit } from "@/lib/streaming/runEvents";
-import { recordToolCall } from "@/lib/llm";
+import { canUseTool, runTool, toolContext } from "@/lib/tools";
 import { normalizeDomain } from "@/lib/identity";
 import type { RawCandidate } from "@/lib/types";
 import type { ResearchState, ResearchUpdate } from "@/lib/graphs/research/state";
@@ -31,16 +29,29 @@ export async function discover(state: ResearchState): Promise<ResearchUpdate> {
   await emit(state.runId, "node_start", { node: "discover" });
 
   const skills = resolveSkills(state.skills, "research");
-  const discovery = discoveryProvider(state.productId);
+  const tools = toolContext({
+    productId: state.productId,
+    runId: state.runId,
+    allowedTools: skills.allowedTools,
+  });
   const errors: string[] = [];
   const candidates: RawCandidate[] = [];
 
   // Never search our own domain back at ourselves.
   const ownDomain = normalizeDomain(state.profile?.icp.exampleCustomerUrls?.[0]);
 
-  if (skills.allowedTools.has("exa.search")) {
+  if (canUseTool(tools, "exoSearch")) {
     const results = await mapWithLimit(state.queries, DEFAULT_CONCURRENCY, (query) =>
-      discovery.search(query, { limit: PER_QUERY_LIMIT, excludeDomains: ownDomain ? [ownDomain] : undefined })
+      runTool(
+        {
+          tool: "exoSearch",
+          action: "search",
+          query,
+          limit: PER_QUERY_LIMIT,
+          excludeDomains: ownDomain ? [ownDomain] : undefined,
+        },
+        tools
+      )
     );
     results.forEach((result, index) => {
       if (!result.ok) {
@@ -49,23 +60,22 @@ export async function discover(state: ResearchState): Promise<ResearchUpdate> {
       }
       candidates.push(...result.value);
     });
-    await recordToolCall(state.runId, state.queries.length);
   }
 
   // LinkedIn people search. Facets come from plan_queries and stay put across
   // refinements — refine_queries rewrites prose, and a job title is not prose.
-  if (
-    features.up2data &&
-    state.linkedinFilters &&
-    skills.allowedTools.has("linkedin.searchPeople")
-  ) {
-    const linkedin = linkedInProvider(state.productId);
+  if (state.linkedinFilters && canUseTool(tools, "linkedinSearch")) {
     try {
-      const people = await linkedin.searchPeople(state.linkedinFilters, {
-        maxResults: LINKEDIN_RESULT_LIMIT,
-      });
+      const people = await runTool(
+        {
+          tool: "linkedinSearch",
+          action: "people",
+          filters: state.linkedinFilters,
+          maxResults: LINKEDIN_RESULT_LIMIT,
+        },
+        tools
+      );
       candidates.push(...people);
-      await recordToolCall(state.runId, 1);
       await emit(state.runId, "progress", {
         node: "discover",
         label: "Discovering",
@@ -85,15 +95,14 @@ export async function discover(state: ResearchState): Promise<ResearchUpdate> {
     state.useProfile &&
     state.iterations === 0 &&
     exampleUrls.length > 0 &&
-    skills.allowedTools.has("exa.findSimilar")
+    canUseTool(tools, "exoSearch")
   ) {
     const similar = await mapWithLimit(exampleUrls.slice(0, 2), 2, (url) =>
-      discovery.findSimilar(url, { limit: PER_QUERY_LIMIT })
+      runTool({ tool: "exoSearch", action: "findSimilar", url, limit: PER_QUERY_LIMIT }, tools)
     );
     for (const result of similar) {
       if (result.ok) candidates.push(...result.value);
     }
-    await recordToolCall(state.runId, Math.min(2, exampleUrls.length));
   }
 
   // Dedupe by source URL before anything downstream pays for them, and append

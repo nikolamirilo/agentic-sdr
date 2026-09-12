@@ -1,14 +1,11 @@
 import { z } from "zod";
-import { extractionProvider } from "@/lib/providers/firecrawl";
-import { enrichmentProvider } from "@/lib/providers/enrichment";
-import { linkedInProvider, isLinkedInProfileUrl, renderProfileText } from "@/lib/providers/up2data";
-import { features } from "@/lib/env";
+import { isLinkedInProfileUrl, renderProfileText } from "@/lib/providers/up2data";
 import { resolveSkills } from "@/lib/skills/registry";
 import { mapWithLimit, DEFAULT_CONCURRENCY } from "@/lib/providers/resilience";
 import { emit } from "@/lib/streaming/runEvents";
+import { canUseTool, runTool, toolContext } from "@/lib/tools";
 import { computeIdentityKey } from "@/lib/identity";
 import { recordCandidate } from "@/lib/db/queries";
-import { recordToolCall } from "@/lib/llm";
 import type { EnrichedCandidate, ResearchState, ResearchUpdate } from "@/lib/graphs/research/state";
 
 /**
@@ -49,8 +46,11 @@ export async function enrich(state: ResearchState): Promise<ResearchUpdate> {
   await emit(state.runId, "node_start", { node: "enrich" });
 
   const skills = resolveSkills(state.skills, "research");
-  const extraction = extractionProvider(state.productId);
-  const contacts = enrichmentProvider();
+  const tools = toolContext({
+    productId: state.productId,
+    runId: state.runId,
+    allowedTools: skills.allowedTools,
+  });
 
   // Respect the remaining candidate budget: never examine past the cap.
   const remainingBudget = Math.max(0, state.budget.maxCandidates - state.examinedCount);
@@ -67,11 +67,10 @@ export async function enrich(state: ResearchState): Promise<ResearchUpdate> {
     inFlight: batch.length,
   });
 
-  const canScrape = skills.allowedTools.has("firecrawl.scrape");
-  const canLookUpContacts = skills.allowedTools.has("enrichment.lookup");
-  const canReadProfiles = features.up2data && skills.allowedTools.has("linkedin.enrichProfile");
-  const canReadCompanies = features.up2data && skills.allowedTools.has("linkedin.enrichCompany");
-  const linkedin = linkedInProvider(state.productId);
+  const canScrape = canUseTool(tools, "firecrawlSearch");
+  const canLookUpContacts = canUseTool(tools, "contactLookup");
+  // One grant covers reading profiles and companies alike.
+  const canUseLinkedIn = canUseTool(tools, "linkedinSearch");
 
   const results = await mapWithLimit(batch, DEFAULT_CONCURRENCY, async (candidate) => {
     let pageText = candidate.snippet ?? "";
@@ -85,8 +84,8 @@ export async function enrich(state: ResearchState): Promise<ResearchUpdate> {
 
     const memberUrl = isLinkedInProfileUrl(candidate.sourceUrl) ? candidate.sourceUrl : undefined;
 
-    if (memberUrl && canReadProfiles) {
-      const profile = await linkedin.enrichProfile(memberUrl);
+    if (memberUrl && canUseLinkedIn) {
+      const profile = await runTool({ tool: "linkedinSearch", action: "profile", url: memberUrl }, tools);
       if (profile) {
         fullName = profile.fullName ?? fullName;
         company = profile.company ?? company;
@@ -110,12 +109,17 @@ export async function enrich(state: ResearchState): Promise<ResearchUpdate> {
         }
       }
     } else if (canScrape && !memberUrl) {
-      const scraped = await extraction.scrape<z.infer<typeof CandidateExtractSchema>>(
-        candidate.sourceUrl,
-        CandidateExtractSchema,
-        { prompt: "Extract who this company is, what they do, and what is happening there now." }
+      const scraped = await runTool(
+        {
+          tool: "firecrawlSearch",
+          action: "scrape",
+          url: candidate.sourceUrl,
+          schema: CandidateExtractSchema,
+          prompt: "Extract who this company is, what they do, and what is happening there now.",
+        },
+        tools
       );
-      extracted = scraped.json;
+      extracted = scraped.json as z.infer<typeof CandidateExtractSchema> | undefined;
       fullName = extracted?.personName ?? fullName;
       company = extracted?.companyName ?? company;
       role = extracted?.role ?? role;
@@ -131,8 +135,11 @@ export async function enrich(state: ResearchState): Promise<ResearchUpdate> {
      * Skipped when we already have a domain, which is every Firecrawl candidate.
      */
     const orgId = typeof evidence.companyLinkedInId === "string" ? evidence.companyLinkedInId : undefined;
-    if (canReadCompanies && orgId && !companyDomain) {
-      const org = await linkedin.enrichCompany({ linkedinId: orgId });
+    if (canUseLinkedIn && orgId && !companyDomain) {
+      const org = await runTool(
+        { tool: "linkedinSearch", action: "company", target: { linkedinId: orgId } },
+        tools
+      );
       if (org) {
         company = org.name ?? company;
         companyDomain = org.domain ?? companyDomain;
@@ -179,7 +186,10 @@ export async function enrich(state: ResearchState): Promise<ResearchUpdate> {
     };
 
     if (!merged.email && canLookUpContacts) {
-      const contact = await contacts.enrich(merged, { markdown: pageText }).catch(() => undefined);
+      const contact = await runTool(
+        { tool: "contactLookup", action: "email", candidate: merged, markdown: pageText },
+        tools
+      ).catch(() => undefined);
       if (contact?.email) {
         merged.email = contact.email;
         merged.phone = contact.phone ?? merged.phone;
@@ -217,8 +227,6 @@ export async function enrich(state: ResearchState): Promise<ResearchUpdate> {
     }
     enriched.push(result.value);
   }
-
-  await recordToolCall(state.runId, batch.length);
 
   await emit(state.runId, "progress", {
     node: "enrich",
