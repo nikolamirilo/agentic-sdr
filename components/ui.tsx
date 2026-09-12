@@ -153,6 +153,12 @@ export const IconPlus = Icon.Plus;
 export const IconCheck = Icon.Check;
 export const IconSpark = Icon.Spark;
 export const IconExternal = Icon.External;
+export const IconDocument = Icon.Document;
+export const IconUpload = Icon.Upload;
+export const IconPencil = Icon.Pencil;
+export const IconSearch = Icon.Search;
+export const IconSliders = Icon.Sliders;
+export const IconMail = Icon.Mail;
 
 /* --------------------------------------------------------------- buttons */
 
