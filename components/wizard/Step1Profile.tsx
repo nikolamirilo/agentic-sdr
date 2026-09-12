@@ -5,7 +5,8 @@ import type { ProductProfile } from "@/lib/types";
 import {
   Button,
   Card,
-  Expandable,
+  Tabs,
+  TabPanel,
   Field,
   Icon,
   Notice,
@@ -234,12 +235,11 @@ function ProfileSections({
   error: string;
 }) {
   const [draft, setDraft] = useState(profile);
-  const [open, setOpen] = useState<string | null>("definition");
+  const [active, setActive] = useState("definition");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(profile);
-  const toggle = (id: string) => setOpen((prev) => (prev === id ? null : id));
 
   async function save() {
     setSaving(true);
@@ -271,6 +271,25 @@ function ProfileSections({
 
   const totalWeight = draft.scoringCriteria.reduce((sum, c) => sum + c.weight, 0);
 
+  const tabs = [
+    { id: "definition", number: "01", title: "Product Definition" },
+    { id: "icp", number: "02", title: "ICP Definition" },
+    { id: "knowledge", number: "03", title: "Domain Knowledge" },
+    {
+      id: "language",
+      number: "04",
+      title: "Domain Language",
+      badge: draft.domainLanguage.terms.length,
+    },
+    { id: "disqualifiers", number: "05", title: "Disqualifiers", badge: draft.disqualifiers.length },
+    {
+      id: "criteria",
+      number: "06",
+      title: "Scoring Criteria",
+      badge: draft.scoringCriteria.length,
+    },
+  ];
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -297,382 +316,400 @@ function ProfileSections({
 
       {(error || saveError) && <Notice tone="bad">{error || saveError}</Notice>}
 
-      <div className="space-y-3">
-        <Expandable
-          number="01"
-          title="Product Definition"
-          summary={draft.productDefinition.oneLiner}
-          open={open === "definition"}
-          onToggle={() => toggle("definition")}
-        >
-          <div className="space-y-5">
-            <Field label="One-liner">
-              <input
-                className={inputClass}
-                value={draft.productDefinition.oneLiner}
-                onChange={(event) =>
-                  setDraft({
-                    ...draft,
-                    productDefinition: { ...draft.productDefinition, oneLiner: event.target.value },
-                  })
-                }
-              />
-            </Field>
-            <Field label="What it does">
-              <AutoTextarea
-                className={`${inputClass} min-h-24`}
-                value={draft.productDefinition.whatItDoes}
-                onChange={(whatItDoes) =>
-                  setDraft({
-                    ...draft,
-                    productDefinition: { ...draft.productDefinition, whatItDoes },
-                  })
-                }
-              />
-            </Field>
-            <ListEditor
-              label="Capabilities"
-              hint="What the product actually does, one capability per row."
-              values={draft.productDefinition.capabilities}
-              onChange={(capabilities) =>
-                setDraft({
-                  ...draft,
-                  productDefinition: { ...draft.productDefinition, capabilities },
-                })
-              }
-            />
-            <ListEditor
-              label="Problems solved"
-              hint="The pain a buyer feels before this product exists."
-              values={draft.productDefinition.problemsSolved}
-              onChange={(problemsSolved) =>
-                setDraft({
-                  ...draft,
-                  productDefinition: { ...draft.productDefinition, problemsSolved },
-                })
-              }
-            />
-            <ListEditor
-              label="Differentiators"
-              hint="Why this and not the obvious alternative."
-              values={draft.productDefinition.differentiators}
-              onChange={(differentiators) =>
-                setDraft({
-                  ...draft,
-                  productDefinition: { ...draft.productDefinition, differentiators },
-                })
-              }
-            />
-            <Field label="Pricing model">
-              <AutoTextarea
-                className={`${inputClass} min-h-16`}
-                value={draft.productDefinition.pricingModel ?? ""}
-                onChange={(pricingModel) =>
-                  setDraft({
-                    ...draft,
-                    productDefinition: { ...draft.productDefinition, pricingModel },
-                  })
-                }
-              />
-            </Field>
-          </div>
-        </Expandable>
+      <div className="space-y-5">
+        <Tabs tabs={tabs} active={active} onSelect={setActive} label="Profile sections" />
 
-        <Expandable
-          number="02"
-          title="ICP Definition"
-          summary={draft.icp.summary}
-          open={open === "icp"}
-          onToggle={() => toggle("icp")}
-        >
-          <div className="space-y-5">
-            <Field
-              label="Summary"
-              hint="Narrow enough to search against. “Companies that want to grow” is not."
-            >
-              <AutoTextarea
-                className={`${inputClass} min-h-24`}
-                value={draft.icp.summary}
-                onChange={(summary) => setDraft({ ...draft, icp: { ...draft.icp, summary } })}
-              />
-            </Field>
-            <Field label="Company size">
-              <input
-                className={inputClass}
-                value={draft.icp.companySize}
-                onChange={(event) =>
-                  setDraft({ ...draft, icp: { ...draft.icp, companySize: event.target.value } })
-                }
-              />
-            </Field>
-            <ListEditor
-              label="Company types"
-              values={draft.icp.companyTypes}
-              onChange={(companyTypes) => setDraft({ ...draft, icp: { ...draft.icp, companyTypes } })}
-            />
-            <div className="grid gap-5 lg:grid-cols-2">
+        <TabPanel id={active}>
+          {active === "definition" && (
+            <div className="space-y-5">
+              <Field label="One-liner">
+                <input
+                  className={inputClass}
+                  value={draft.productDefinition.oneLiner}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      productDefinition: { ...draft.productDefinition, oneLiner: event.target.value },
+                    })
+                  }
+                />
+              </Field>
+              <Field label="What it does">
+                <AutoTextarea
+                  className={`${inputClass} min-h-24`}
+                  value={draft.productDefinition.whatItDoes}
+                  onChange={(whatItDoes) =>
+                    setDraft({
+                      ...draft,
+                      productDefinition: { ...draft.productDefinition, whatItDoes },
+                    })
+                  }
+                />
+              </Field>
               <ListEditor
-                label="Industries"
-                values={draft.icp.industries}
-                onChange={(industries) => setDraft({ ...draft, icp: { ...draft.icp, industries } })}
-              />
-              <ListEditor
-                label="Buyer roles"
-                values={draft.icp.buyerRoles}
-                onChange={(buyerRoles) => setDraft({ ...draft, icp: { ...draft.icp, buyerRoles } })}
-              />
-            </div>
-            <ListEditor
-              label="Trigger signals"
-              hint="Events that mean a company is in the market right now."
-              values={draft.icp.triggerSignals}
-              onChange={(triggerSignals) =>
-                setDraft({ ...draft, icp: { ...draft.icp, triggerSignals } })
-              }
-            />
-            <div className="grid gap-5 lg:grid-cols-2">
-              <ListEditor
-                label="Geographies"
-                values={draft.icp.geographies}
-                onChange={(geographies) => setDraft({ ...draft, icp: { ...draft.icp, geographies } })}
-              />
-              <ListEditor
-                label="Example customers"
-                hint="URLs of companies that already look like the target."
-                values={draft.icp.exampleCustomerUrls}
-                onChange={(exampleCustomerUrls) =>
-                  setDraft({ ...draft, icp: { ...draft.icp, exampleCustomerUrls } })
-                }
-              />
-            </div>
-          </div>
-        </Expandable>
-
-        <Expandable
-          number="03"
-          title="Domain Knowledge"
-          summary={draft.domainKnowledge.marketSummary}
-          open={open === "knowledge"}
-          onToggle={() => toggle("knowledge")}
-        >
-          <div className="space-y-5">
-            <Field label="Market summary">
-              <AutoTextarea
-                className={`${inputClass} min-h-24`}
-                value={draft.domainKnowledge.marketSummary}
-                onChange={(marketSummary) =>
+                label="Capabilities"
+                hint="What the product actually does, one capability per row."
+                values={draft.productDefinition.capabilities}
+                onChange={(capabilities) =>
                   setDraft({
                     ...draft,
-                    domainKnowledge: { ...draft.domainKnowledge, marketSummary },
+                    productDefinition: { ...draft.productDefinition, capabilities },
                   })
                 }
               />
-            </Field>
-            <ListEditor
-              label="Pain points"
-              values={draft.domainKnowledge.painPoints}
-              onChange={(painPoints) =>
-                setDraft({ ...draft, domainKnowledge: { ...draft.domainKnowledge, painPoints } })
-              }
-            />
-            <ListEditor
-              label="Common workflows"
-              values={draft.domainKnowledge.commonWorkflows}
-              onChange={(commonWorkflows) =>
-                setDraft({ ...draft, domainKnowledge: { ...draft.domainKnowledge, commonWorkflows } })
-              }
-            />
-            <ListEditor
-              label="Competitors"
-              values={draft.domainKnowledge.competitors}
-              onChange={(competitors) =>
-                setDraft({ ...draft, domainKnowledge: { ...draft.domainKnowledge, competitors } })
-              }
-            />
-          </div>
-        </Expandable>
-
-        <Expandable
-          number="04"
-          title="Domain Language"
-          summary={`${draft.domainLanguage.terms.length} terms`}
-          open={open === "language"}
-          onToggle={() => toggle("language")}
-        >
-          <p className="mb-4 text-[13px] leading-relaxed text-ink-2">
-            Every term was found word-for-word in a source we read, and links to where. Terms with no
-            evidence were dropped — that is what keeps this from becoming generic marketing vocabulary.
-          </p>
-          {draft.domainLanguage.terms.length === 0 ? (
-            <p className="text-[14px] text-ink-3">No terms survived verification.</p>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {draft.domainLanguage.terms.map((term) => (
-                <span
-                  key={term.term}
-                  className="inline-flex items-center gap-2 rounded-[8px] border border-line bg-surface-sunken py-1.5 pl-3 pr-2 text-[13px]"
-                  title={term.meaning}
-                >
-                  <span className="font-medium text-ink">{term.term}</span>
-                  <a
-                    href={term.evidenceUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    aria-label={`Evidence for ${term.term}`}
-                    className="text-ink-3 transition-colors hover:text-accent"
-                  >
-                    <Icon.External className="h-3.5 w-3.5" />
-                  </a>
-                  <button
-                    type="button"
-                    aria-label={`Remove ${term.term}`}
-                    onClick={() =>
-                      setDraft({
-                        ...draft,
-                        domainLanguage: {
-                          terms: draft.domainLanguage.terms.filter((t) => t.term !== term.term),
-                        },
-                      })
-                    }
-                    className="text-ink-3 transition-colors hover:text-bad"
-                  >
-                    <Icon.Close className="h-3.5 w-3.5" />
-                  </button>
-                </span>
-              ))}
+              <ListEditor
+                label="Problems solved"
+                hint="The pain a buyer feels before this product exists."
+                values={draft.productDefinition.problemsSolved}
+                onChange={(problemsSolved) =>
+                  setDraft({
+                    ...draft,
+                    productDefinition: { ...draft.productDefinition, problemsSolved },
+                  })
+                }
+              />
+              <ListEditor
+                label="Differentiators"
+                hint="Why this and not the obvious alternative."
+                values={draft.productDefinition.differentiators}
+                onChange={(differentiators) =>
+                  setDraft({
+                    ...draft,
+                    productDefinition: { ...draft.productDefinition, differentiators },
+                  })
+                }
+              />
+              <Field label="Pricing model">
+                <AutoTextarea
+                  className={`${inputClass} min-h-16`}
+                  value={draft.productDefinition.pricingModel ?? ""}
+                  onChange={(pricingModel) =>
+                    setDraft({
+                      ...draft,
+                      productDefinition: { ...draft.productDefinition, pricingModel },
+                    })
+                  }
+                />
+              </Field>
             </div>
           )}
-        </Expandable>
 
-        <Expandable
-          number="05"
-          title="Disqualifiers"
-          summary={`${draft.disqualifiers.length} rules`}
-          open={open === "disqualifiers"}
-          onToggle={() => toggle("disqualifiers")}
-        >
-          <p className="mb-4 text-[13px] leading-relaxed text-ink-2">
-            Reasons to stop, not reasons to score lower. A candidate matching any of these is dropped.
-          </p>
-          <ul className="space-y-2">
-            {draft.disqualifiers.map((rule, index) => (
-              <li
-                key={rule.id}
-                className="flex items-start gap-3 rounded-[10px] border border-line bg-surface px-3 py-2.5 transition-colors focus-within:border-accent hover:border-line-strong"
+          {active === "icp" && (
+            <div className="space-y-5">
+              <Field
+                label="Summary"
+                hint="Narrow enough to search against. “Companies that want to grow” is not."
               >
-                <span className="section-number shrink-0 pt-2">{rule.id}</span>
-                <span className="min-w-0 flex-1 space-y-0.5">
-                  <AutoTextarea
-                    value={rule.rule}
-                    ariaLabel={`Rule ${rule.id}`}
-                    placeholder="The rule"
-                    onChange={(next) => {
-                      const disqualifiers = [...draft.disqualifiers];
-                      disqualifiers[index] = { ...rule, rule: next };
-                      setDraft({ ...draft, disqualifiers });
-                    }}
-                    className="w-full border-0 bg-transparent px-1 py-1 text-[14px] font-medium leading-relaxed text-ink placeholder:text-ink-3 focus:outline-none"
-                  />
-                  <AutoTextarea
-                    value={rule.rationale}
-                    ariaLabel={`Why rule ${rule.id} exists`}
-                    placeholder="Why it disqualifies"
-                    onChange={(next) => {
-                      const disqualifiers = [...draft.disqualifiers];
-                      disqualifiers[index] = { ...rule, rationale: next };
-                      setDraft({ ...draft, disqualifiers });
-                    }}
-                    className="w-full border-0 bg-transparent px-1 py-1 text-[13px] leading-relaxed text-ink-3 placeholder:text-ink-3 focus:outline-none"
-                  />
-                </span>
-                <button
-                  type="button"
-                  aria-label={`Remove rule ${rule.id}`}
-                  onClick={() =>
-                    setDraft({
-                      ...draft,
-                      disqualifiers: draft.disqualifiers.filter((d) => d.id !== rule.id),
-                    })
-                  }
-                  className="mt-2 shrink-0 text-ink-3 transition-colors hover:text-bad"
-                >
-                  <Icon.Close className="h-4 w-4" />
-                </button>
-              </li>
-            ))}
-            {draft.disqualifiers.length === 0 && (
-              <li className="text-[14px] text-ink-3">
-                No disqualifiers. Every candidate will be scored.
-              </li>
-            )}
-          </ul>
-        </Expandable>
-
-        <Expandable
-          number="06"
-          title="Scoring Criteria"
-          summary={`${draft.scoringCriteria.length} weighted questions`}
-          open={open === "criteria"}
-          onToggle={() => toggle("criteria")}
-        >
-          <p className="mb-4 text-[13px] leading-relaxed text-ink-2">
-            Yes-or-no questions answerable from a candidate&rsquo;s public footprint. A lead needs 60%
-            of the total weight to qualify, which is what makes the bar in step three mean something.
-          </p>
-          <ul className="space-y-2">
-            {draft.scoringCriteria.map((criterion, index) => (
-              <li
-                key={criterion.id}
-                className="flex items-start gap-2.5 rounded-[10px] border border-line bg-surface-sunken px-2.5 py-1.5 transition-colors focus-within:border-accent hover:border-line-strong"
-              >
-                <span className="section-number w-6 shrink-0 pt-2">{criterion.id}</span>
                 <AutoTextarea
-                  value={criterion.question}
-                  ariaLabel={`Question for ${criterion.id}`}
-                  onChange={(question) => {
-                    const next = [...draft.scoringCriteria];
-                    next[index] = { ...criterion, question };
-                    setDraft({ ...draft, scoringCriteria: next });
-                  }}
-                  className="min-w-0 flex-1 border-0 bg-transparent px-1 py-1.5 text-[14px] leading-relaxed text-ink focus:outline-none"
+                  className={`${inputClass} min-h-24`}
+                  value={draft.icp.summary}
+                  onChange={(summary) => setDraft({ ...draft, icp: { ...draft.icp, summary } })}
                 />
+              </Field>
+              <Field label="Company size">
                 <input
-                  type="number"
-                  min={1}
-                  max={5}
-                  aria-label={`Weight for ${criterion.id}`}
-                  className={`${inputClass} tabular h-9 w-14 shrink-0 px-0 py-0 text-center text-[14px]`}
-                  value={criterion.weight}
-                  onChange={(event) => {
-                    const next = [...draft.scoringCriteria];
-                    next[index] = { ...criterion, weight: Number(event.target.value) || 1 };
-                    setDraft({ ...draft, scoringCriteria: next });
-                  }}
+                  className={inputClass}
+                  value={draft.icp.companySize}
+                  onChange={(event) =>
+                    setDraft({ ...draft, icp: { ...draft.icp, companySize: event.target.value } })
+                  }
                 />
-                <button
-                  type="button"
-                  aria-label={`Remove ${criterion.id}`}
-                  onClick={() =>
+              </Field>
+              <ListEditor
+                label="Company types"
+                values={draft.icp.companyTypes}
+                onChange={(companyTypes) => setDraft({ ...draft, icp: { ...draft.icp, companyTypes } })}
+              />
+              <div className="grid gap-5 lg:grid-cols-2">
+                <ListEditor
+                  label="Industries"
+                  values={draft.icp.industries}
+                  onChange={(industries) => setDraft({ ...draft, icp: { ...draft.icp, industries } })}
+                />
+                <ListEditor
+                  label="Buyer roles"
+                  values={draft.icp.buyerRoles}
+                  onChange={(buyerRoles) => setDraft({ ...draft, icp: { ...draft.icp, buyerRoles } })}
+                />
+              </div>
+              <ListEditor
+                label="Trigger signals"
+                hint="Events that mean a company is in the market right now."
+                values={draft.icp.triggerSignals}
+                onChange={(triggerSignals) =>
+                  setDraft({ ...draft, icp: { ...draft.icp, triggerSignals } })
+                }
+              />
+              <div className="grid gap-5 lg:grid-cols-2">
+                <ListEditor
+                  label="Geographies"
+                  values={draft.icp.geographies}
+                  onChange={(geographies) => setDraft({ ...draft, icp: { ...draft.icp, geographies } })}
+                />
+                <ListEditor
+                  label="Example customers"
+                  hint="URLs of companies that already look like the target."
+                  values={draft.icp.exampleCustomerUrls}
+                  onChange={(exampleCustomerUrls) =>
+                    setDraft({ ...draft, icp: { ...draft.icp, exampleCustomerUrls } })
+                  }
+                />
+              </div>
+            </div>
+          )}
+
+          {active === "knowledge" && (
+            <div className="space-y-5">
+              <Field label="Market summary">
+                <AutoTextarea
+                  className={`${inputClass} min-h-24`}
+                  value={draft.domainKnowledge.marketSummary}
+                  onChange={(marketSummary) =>
                     setDraft({
                       ...draft,
-                      scoringCriteria: draft.scoringCriteria.filter((_, i) => i !== index),
+                      domainKnowledge: { ...draft.domainKnowledge, marketSummary },
                     })
                   }
-                  className="mt-2 shrink-0 text-ink-3 transition-colors hover:text-bad"
-                >
-                  <Icon.Close className="h-4 w-4" />
-                </button>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-4 text-[13px] text-ink-3">
-            Total weight <span className="tabular font-medium text-ink-2">{totalWeight}</span>. A
-            candidate needs{" "}
-            <span className="tabular font-medium text-ink-2">{(totalWeight * 0.6).toFixed(1)}</span> to
-            become a lead.
-          </p>
-        </Expandable>
+                />
+              </Field>
+              <ListEditor
+                label="Pain points"
+                values={draft.domainKnowledge.painPoints}
+                onChange={(painPoints) =>
+                  setDraft({ ...draft, domainKnowledge: { ...draft.domainKnowledge, painPoints } })
+                }
+              />
+              <ListEditor
+                label="Common workflows"
+                values={draft.domainKnowledge.commonWorkflows}
+                onChange={(commonWorkflows) =>
+                  setDraft({ ...draft, domainKnowledge: { ...draft.domainKnowledge, commonWorkflows } })
+                }
+              />
+              <ListEditor
+                label="Competitors"
+                values={draft.domainKnowledge.competitors}
+                onChange={(competitors) =>
+                  setDraft({ ...draft, domainKnowledge: { ...draft.domainKnowledge, competitors } })
+                }
+              />
+            </div>
+          )}
+
+          {active === "language" && (
+            <div>
+              <p className="mb-4 text-[13px] leading-relaxed text-ink-2">
+                Every term was found word-for-word in a source we read, and links to where. Terms with no
+                evidence were dropped — that is what keeps this from becoming generic marketing vocabulary.
+              </p>
+              {draft.domainLanguage.terms.length === 0 ? (
+                <p className="text-[14px] text-ink-3">No terms survived verification.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {draft.domainLanguage.terms.map((term) => (
+                    <span
+                      key={term.term}
+                      className="inline-flex items-center gap-2 rounded-[8px] border border-line bg-surface-sunken py-1.5 pl-3 pr-2 text-[13px]"
+                      title={term.meaning}
+                    >
+                      <span className="font-medium text-ink">{term.term}</span>
+                      <a
+                        href={term.evidenceUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label={`Evidence for ${term.term}`}
+                        className="text-ink-3 transition-colors hover:text-accent"
+                      >
+                        <Icon.External className="h-3.5 w-3.5" />
+                      </a>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${term.term}`}
+                        onClick={() =>
+                          setDraft({
+                            ...draft,
+                            domainLanguage: {
+                              terms: draft.domainLanguage.terms.filter((t) => t.term !== term.term),
+                            },
+                          })
+                        }
+                        className="text-ink-3 transition-colors hover:text-bad"
+                      >
+                        <Icon.Close className="h-3.5 w-3.5" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {active === "disqualifiers" && (
+            <div>
+              <p className="mb-4 text-[13px] leading-relaxed text-ink-2">
+                Reasons to stop, not reasons to score lower. A candidate matching any of these is dropped.
+              </p>
+              <ul className="space-y-2">
+                {draft.disqualifiers.map((rule, index) => (
+                  <li
+                    key={rule.id}
+                    className="flex items-start gap-3 rounded-[10px] border border-line bg-surface px-3 py-2.5 transition-colors focus-within:border-accent hover:border-line-strong"
+                  >
+                    <span className="section-number shrink-0 pt-2">{rule.id}</span>
+                    <span className="min-w-0 flex-1 space-y-0.5">
+                      <AutoTextarea
+                        value={rule.rule}
+                        ariaLabel={`Rule ${rule.id}`}
+                        placeholder="The rule"
+                        onChange={(next) => {
+                          const disqualifiers = [...draft.disqualifiers];
+                          disqualifiers[index] = { ...rule, rule: next };
+                          setDraft({ ...draft, disqualifiers });
+                        }}
+                        className="w-full border-0 bg-transparent px-1 py-1 text-[14px] font-medium leading-relaxed text-ink placeholder:text-ink-3 focus:outline-none"
+                      />
+                      <AutoTextarea
+                        value={rule.rationale}
+                        ariaLabel={`Why rule ${rule.id} exists`}
+                        placeholder="Why it disqualifies"
+                        onChange={(next) => {
+                          const disqualifiers = [...draft.disqualifiers];
+                          disqualifiers[index] = { ...rule, rationale: next };
+                          setDraft({ ...draft, disqualifiers });
+                        }}
+                        className="w-full border-0 bg-transparent px-1 py-1 text-[13px] leading-relaxed text-ink-3 placeholder:text-ink-3 focus:outline-none"
+                      />
+                    </span>
+                    <button
+                      type="button"
+                      aria-label={`Remove rule ${rule.id}`}
+                      onClick={() =>
+                        setDraft({
+                          ...draft,
+                          disqualifiers: draft.disqualifiers.filter((d) => d.id !== rule.id),
+                        })
+                      }
+                      className="mt-2 shrink-0 text-ink-3 transition-colors hover:text-bad"
+                    >
+                      <Icon.Close className="h-4 w-4" />
+                    </button>
+                  </li>
+                ))}
+                {draft.disqualifiers.length === 0 && (
+                  <li className="text-[14px] text-ink-3">
+                    No disqualifiers. Every candidate will be scored.
+                  </li>
+                )}
+              </ul>
+            </div>
+          )}
+
+          {active === "criteria" && (
+            <div>
+              <p className="mb-4 text-[13px] leading-relaxed text-ink-2">
+                Yes-or-no questions answerable from a candidate&rsquo;s public footprint. A lead needs 60%
+                of the total weight to qualify, which is what makes the bar in step three mean something.
+              </p>
+              <ul className="space-y-2.5">
+                {draft.scoringCriteria.map((criterion, index) => (
+                  <li
+                    key={criterion.id}
+                    className="rounded-[10px] border border-line bg-surface px-3.5 py-3 transition-colors focus-within:border-accent hover:border-line-strong"
+                  >
+                    <div className="mb-1.5 flex items-center gap-3">
+                      <span className="section-number shrink-0 uppercase">{criterion.id}</span>
+                      <span className="h-px flex-1 bg-line" aria-hidden />
+                      <WeightPicker
+                        value={criterion.weight}
+                        label={`Weight for ${criterion.id}`}
+                        onChange={(weight) => {
+                          const next = [...draft.scoringCriteria];
+                          next[index] = { ...criterion, weight };
+                          setDraft({ ...draft, scoringCriteria: next });
+                        }}
+                      />
+                      <button
+                        type="button"
+                        aria-label={`Remove ${criterion.id}`}
+                        onClick={() =>
+                          setDraft({
+                            ...draft,
+                            scoringCriteria: draft.scoringCriteria.filter((_, i) => i !== index),
+                          })
+                        }
+                        className="shrink-0 text-ink-3 transition-colors hover:text-bad"
+                      >
+                        <Icon.Close className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <AutoTextarea
+                      value={criterion.question}
+                      ariaLabel={`Question for ${criterion.id}`}
+                      onChange={(question) => {
+                        const next = [...draft.scoringCriteria];
+                        next[index] = { ...criterion, question };
+                        setDraft({ ...draft, scoringCriteria: next });
+                      }}
+                      className="w-full border-0 bg-transparent px-0 py-0 text-[14px] leading-relaxed text-ink focus:outline-none"
+                    />
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-4 text-[13px] text-ink-3">
+                Total weight <span className="tabular font-medium text-ink-2">{totalWeight}</span>. A
+                candidate needs{" "}
+                <span className="tabular font-medium text-ink-2">{(totalWeight * 0.6).toFixed(1)}</span> to
+                become a lead.
+              </p>
+            </div>
+          )}
+        </TabPanel>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Weight is a 1-to-5 scale, and a bare number box says none of that. Five
+ * buttons show the whole range, mark where this criterion sits on it, and take
+ * one click to change — which matters when you are balancing nine of them
+ * against each other.
+ */
+function WeightPicker({
+  value,
+  label,
+  onChange,
+}: {
+  value: number;
+  label: string;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      className="flex shrink-0 items-center gap-1.5"
+    >
+      <span className="hidden text-[12px] text-ink-3 sm:inline">Weight</span>
+      <span className="flex items-center gap-0.5 rounded-[8px] border border-line bg-surface-sunken p-0.5">
+        {[1, 2, 3, 4, 5].map((weight) => (
+          <button
+            key={weight}
+            type="button"
+            role="radio"
+            aria-checked={value === weight}
+            aria-label={`${weight}`}
+            onClick={() => onChange(weight)}
+            className={`tabular h-6 w-6 rounded-[6px] text-[12px] font-medium transition-colors duration-150 ${
+              value === weight
+                ? "bg-accent text-white"
+                : "text-ink-3 hover:bg-surface hover:text-ink"
+            }`}
+          >
+            {weight}
+          </button>
+        ))}
+      </span>
     </div>
   );
 }

@@ -495,43 +495,113 @@ export function Spinner({ className = "h-4 w-4" }: { className?: string }) {
   );
 }
 
-/* ------------------------------------------------------------ disclosure */
+/* ------------------------------------------------------------------ tabs */
 
-export function Expandable({
-  number,
-  title,
-  summary,
-  open,
-  onToggle,
-  children,
-}: {
-  number: string;
+export type TabItem = {
+  id: string;
+  /** The two-digit structural device carried across the rest of the app. */
+  number?: string;
   title: string;
-  summary?: ReactNode;
-  open: boolean;
-  onToggle: () => void;
+  /** A count worth seeing before you open the tab. */
+  badge?: ReactNode;
+};
+
+/**
+ * A tab strip for sections you read one at a time. Sections of a product
+ * profile are long enough that stacked disclosures push the later ones off
+ * screen; tabs keep every section one click away and the panel at a fixed
+ * place on the page.
+ */
+export function Tabs({
+  tabs,
+  active,
+  onSelect,
+  label,
+  className = "",
+}: {
+  tabs: TabItem[];
+  active: string;
+  onSelect: (id: string) => void;
+  label: string;
+  className?: string;
+}) {
+  function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
+    if (!keys.includes(event.key)) return;
+    event.preventDefault();
+    const index = tabs.findIndex((tab) => tab.id === active);
+    const next =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? tabs.length - 1
+          : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    onSelect(tabs[next].id);
+    const element = document.getElementById(`tab-${tabs[next].id}`);
+    element?.focus();
+  }
+
+  return (
+    <div
+      role="tablist"
+      aria-label={label}
+      onKeyDown={onKeyDown}
+      className={`flex gap-1 overflow-x-auto border-b border-line ${className}`}
+    >
+      {tabs.map((tab) => {
+        const selected = tab.id === active;
+        return (
+          <button
+            key={tab.id}
+            id={`tab-${tab.id}`}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            aria-controls={`panel-${tab.id}`}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onSelect(tab.id)}
+            className={`-mb-px flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-3.5 py-2.5 text-[14px] font-medium transition-colors duration-150 ${
+              selected
+                ? "border-accent text-ink"
+                : "border-transparent text-ink-3 hover:border-line-strong hover:text-ink-2"
+            }`}
+          >
+            {tab.number && <span className="section-number">{tab.number}</span>}
+            <span>{tab.title}</span>
+            {tab.badge !== undefined && tab.badge !== null && (
+              <span
+                className={`tabular rounded-full px-1.5 py-0.5 text-[11px] font-medium ${
+                  selected ? "bg-accent-tint text-accent" : "bg-surface-sunken text-ink-3"
+                }`}
+              >
+                {tab.badge}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+export function TabPanel({
+  id,
+  children,
+  className = "",
+}: {
+  id: string;
   children: ReactNode;
+  className?: string;
 }) {
   return (
-    <div className="overflow-hidden rounded-[14px] border border-line bg-surface shadow-card">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className="flex w-full items-center gap-4 px-5 py-4 text-left transition-colors duration-150 hover:bg-surface-sunken"
-      >
-        <span className="section-number shrink-0">{number}</span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-[15px] font-semibold text-ink">{title}</span>
-          {summary && !open && (
-            <span className="mt-0.5 block truncate text-[13px] text-ink-3">{summary}</span>
-          )}
-        </span>
-        <Icon.Chevron
-          className={`h-4 w-4 shrink-0 text-ink-3 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
-        />
-      </button>
-      {open && <div className="border-t border-line px-5 py-5">{children}</div>}
+    <div
+      role="tabpanel"
+      id={`panel-${id}`}
+      aria-labelledby={`tab-${id}`}
+      tabIndex={0}
+      className={`focus:outline-none ${className}`}
+    >
+      {children}
     </div>
   );
 }

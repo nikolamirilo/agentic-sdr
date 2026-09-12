@@ -29,14 +29,39 @@ export type OutreachMessage = {
 
 export type GmailStatus = { configured: boolean; connectedEmail: string | null };
 
-/** One line of the live drafting feed: where this lead's draft has got to. */
-type DraftLine = {
-  leadId: string;
-  leadName: string;
+/** One step a lead's draft has been through, in the order it happened. */
+type DraftStep = {
+  node: string;
   label: string;
   summary: string;
-  done: boolean;
 };
+
+/**
+ * One lead's drafting progress.
+ *
+ * The steps are kept as a list rather than one replaced line. Watching profile
+ * generation tells you both what the graph is doing now and what it already
+ * did; a single line that gets overwritten tells you neither, which is why this
+ * step felt like a spinner even though the graph was narrating the whole time.
+ */
+type DraftProgress = {
+  leadId: string;
+  leadName: string;
+  index: number;
+  total: number;
+  steps: DraftStep[];
+  /** Set once the lead reaches a terminal state. */
+  outcome?: { label: string; failed: boolean; detail: string };
+};
+
+/** One line per node, so a repeated node updates rather than piles up. */
+function upsertStep(steps: DraftStep[], step: DraftStep): DraftStep[] {
+  const at = steps.findIndex((s) => s.node === step.node);
+  if (at === -1) return [...steps, step];
+  const next = [...steps];
+  next[at] = step;
+  return next;
+}
 
 /**
  * Nothing on this step sends on its own. Each draft waits on a LangGraph
@@ -66,11 +91,11 @@ export function Step4Outreach({
   const [error, setError] = useState("");
   const [skipped, setSkipped] = useState<string[]>([]);
   /**
-   * What the graph is doing right now, per lead. Drafting a batch is minutes of
-   * model calls and the old spinner said nothing for all of it — which is
+   * What the graph has done and is doing, per lead. Drafting a batch is minutes
+   * of model calls and a spinner says nothing for all of it — which is
    * indistinguishable from a hang, and the reason this step felt broken.
    */
-  const [feed, setFeed] = useState<DraftLine[]>([]);
+  const [feed, setFeed] = useState<DraftProgress[]>([]);
   const requested = useRef(false);
 
   const leadsById = new Map(leads.map((lead) => [lead.id, lead]));
@@ -106,30 +131,35 @@ export function Step4Outreach({
         }
 
         await readSse(response, (event, data) => {
+          const leadId = String(data.leadId ?? "");
+
           switch (event) {
             case "lead_start":
               setFeed((prev) => [
-                ...prev,
+                ...prev.filter((line) => line.leadId !== leadId),
                 {
-                  leadId: String(data.leadId),
+                  leadId,
                   leadName: String(data.leadName ?? "lead"),
-                  label: `Lead ${data.index} of ${data.total}`,
-                  summary: "",
-                  done: false,
+                  index: Number(data.index ?? prev.length + 1),
+                  total: Number(data.total ?? missing.length),
+                  steps: [],
                 },
               ]);
               break;
 
             case "node":
-              // One line per lead: the feed shows where each draft has got to,
-              // not a transcript of every node it passed through.
+              // Every node the graph reports becomes its own line, so the card
+              // reads as a trail: angle decided, draft written, critique run.
               setFeed((prev) =>
                 prev.map((line) =>
-                  line.leadId === data.leadId
+                  line.leadId === leadId
                     ? {
                         ...line,
-                        label: String(data.label),
-                        summary: String(data.summary ?? ""),
+                        steps: upsertStep(line.steps, {
+                          node: String(data.node),
+                          label: String(data.label ?? data.node),
+                          summary: String(data.summary ?? ""),
+                        }),
                       }
                     : line
                 )
@@ -137,20 +167,31 @@ export function Step4Outreach({
               break;
 
             case "lead_done":
-            case "lead_error":
+            case "lead_error": {
+              const outcome = {
+                label: event === "lead_error" ? "Could not draft" : "Ready for review",
+                failed: event === "lead_error",
+                detail: String(data.error ?? ""),
+              };
               setFeed((prev) =>
-                prev.map((line) =>
-                  line.leadId === data.leadId
-                    ? {
-                        ...line,
-                        done: true,
-                        label: event === "lead_error" ? "Could not draft" : "Ready for review",
-                        summary: String(data.error ?? line.summary),
-                      }
-                    : line
-                )
+                // A lead that never started — one that could not be loaded —
+                // has no card yet, and its failure is the thing worth showing.
+                prev.some((line) => line.leadId === leadId)
+                  ? prev.map((line) => (line.leadId === leadId ? { ...line, outcome } : line))
+                  : [
+                      ...prev,
+                      {
+                        leadId,
+                        leadName: String(data.leadName ?? "lead"),
+                        index: prev.length + 1,
+                        total: missing.length,
+                        steps: [],
+                        outcome,
+                      },
+                    ]
               );
               break;
+            }
 
             case "done": {
               onMessagesChange(data.messages as OutreachMessage[]);
@@ -228,39 +269,21 @@ export function Step4Outreach({
         </div>
       )}
 
-      {drafting && relevant.length === 0 && (
-        <div className="space-y-4">
-          {(feed.length > 0
-            ? feed
-            : approved.slice(0, 2).map((leadId) => ({
+      {drafting && (
+        <div className="mb-6">
+          <DraftingFeed
+            feed={feed}
+            queued={approved
+              .filter(
+                (leadId) =>
+                  !messages.some((message) => message.leadId === leadId) &&
+                  !feed.some((line) => line.leadId === leadId)
+              )
+              .map((leadId) => ({
                 leadId,
                 leadName: leadsById.get(leadId)?.fullName ?? "lead",
-                label: "Queued",
-                summary: "",
-                done: false,
-              }))
-          ).map((line) => (
-            <Card key={line.leadId} padding="lg">
-              <div className="flex items-center gap-3">
-                {line.done ? (
-                  <Icon.Check className="h-4 w-4 text-accent" />
-                ) : (
-                  <Spinner className="h-4 w-4 text-accent" />
-                )}
-                <p className="text-[15px] font-medium">{line.leadName}</p>
-                <Pill tone="neutral">{line.label}</Pill>
-              </div>
-              {line.summary ? (
-                <p className="mt-3 text-[13px] leading-relaxed text-ink-2">{line.summary}</p>
-              ) : (
-                <div className="mt-5 space-y-2.5">
-                  <div className="shimmer h-4 w-1/3 rounded-[6px]" />
-                  <div className="shimmer h-4 w-full rounded-[6px]" />
-                  <div className="shimmer h-4 w-2/3 rounded-[6px]" />
-                </div>
-              )}
-            </Card>
-          ))}
+              }))}
+          />
         </div>
       )}
 
@@ -289,6 +312,114 @@ export function Step4Outreach({
         </Card>
       )}
     </StepFrame>
+  );
+}
+
+/**
+ * The live drafting feed.
+ *
+ * Rendered whenever drafting is happening, not only when there is nothing else
+ * on screen: adding two leads to five existing drafts is still minutes of model
+ * calls, and hiding the feed behind "no drafts yet" was most of why this step
+ * looked like it had hung.
+ */
+function DraftingFeed({
+  feed,
+  queued,
+}: {
+  feed: DraftProgress[];
+  queued: Array<{ leadId: string; leadName: string }>;
+}) {
+  const total = feed.length + queued.length;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <Spinner className="h-4 w-4 text-accent" />
+        <p className="text-[15px] font-medium">
+          Writing {total} message{total === 1 ? "" : "s"}
+        </p>
+        <span className="text-[13px] text-ink-3">
+          A minute or so each. Every draft stops for your approval before it can be sent.
+        </span>
+      </div>
+
+      {feed.map((lead) => (
+        <LeadProgressCard key={lead.leadId} lead={lead} />
+      ))}
+
+      {queued.map((lead) => (
+        <Card key={lead.leadId} padding="md">
+          <div className="flex items-center gap-3">
+            <p className="text-[15px] font-medium text-ink-2">{lead.leadName}</p>
+            <Pill tone="neutral">Queued</Pill>
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+/** One lead: the steps its draft has been through, and where it is now. */
+function LeadProgressCard({ lead }: { lead: DraftProgress }) {
+  const finished = Boolean(lead.outcome);
+
+  return (
+    <Card padding="lg">
+      <div className="flex flex-wrap items-center gap-3">
+        {!finished ? (
+          <Spinner className="h-4 w-4 shrink-0 text-accent" />
+        ) : lead.outcome!.failed ? (
+          <Icon.Warning className="h-4 w-4 shrink-0 text-bad" />
+        ) : (
+          <Icon.Check className="h-4 w-4 shrink-0 text-accent" />
+        )}
+        <p className="text-[15px] font-medium">{lead.leadName}</p>
+        {lead.total > 0 && (
+          <span className="text-[13px] text-ink-3">
+            lead {lead.index} of {lead.total}
+          </span>
+        )}
+        <span className="ml-auto">
+          <Pill tone={finished ? (lead.outcome!.failed ? "bad" : "good") : "neutral"}>
+            {lead.outcome?.label ?? lead.steps.at(-1)?.label ?? "Starting"}
+          </Pill>
+        </span>
+      </div>
+
+      {lead.outcome?.detail && (
+        <p className="mt-2 text-[13px] leading-relaxed text-ink-2">{lead.outcome.detail}</p>
+      )}
+
+      <ol className="mt-4">
+        {lead.steps.map((step, index) => {
+          // The last step is the one still running, until the lead is finished.
+          const active = !finished && index === lead.steps.length - 1;
+          return (
+            <li key={step.node} className="row-in border-b border-line py-2.5 last:border-0">
+              <div className="flex items-baseline gap-3">
+                {active ? (
+                  <Spinner className="h-4 w-4 shrink-0 translate-y-0.5 text-accent" />
+                ) : (
+                  <Icon.Check className="h-4 w-4 shrink-0 translate-y-0.5 text-accent" />
+                )}
+                <span className="min-w-0 flex-1 text-[14px] font-medium">{step.label}</span>
+              </div>
+              {step.summary && (
+                <p className="mt-1 pl-7 text-[13px] leading-relaxed text-ink-2">{step.summary}</p>
+              )}
+            </li>
+          );
+        })}
+
+        {lead.steps.length === 0 && !finished && (
+          <li className="space-y-2 py-2">
+            <div className="shimmer h-4 w-2/3 rounded-[6px]" />
+            <div className="shimmer h-4 w-1/2 rounded-[6px]" />
+          </li>
+        )}
+      </ol>
+    </Card>
   );
 }
 
