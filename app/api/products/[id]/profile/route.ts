@@ -153,9 +153,9 @@ function summarize(node: string, update: Partial<ProfileState>): string {
     case "domain_research":
       return `${update.rawSources?.length ?? 0} sources read`;
     case "extract_product_definition":
-      return update.productDefinition?.oneLiner ?? "";
+      return update.productDefinition?.oneLiner ? "definition extracted" : "";
     case "derive_icp":
-      return update.icp?.summary ?? "";
+      return update.icp?.summary ? "ICP derived" : "";
     case "derive_domain_language":
       return `${update.domainLanguage?.length ?? 0} terms with evidence`;
     case "derive_disqualifiers":

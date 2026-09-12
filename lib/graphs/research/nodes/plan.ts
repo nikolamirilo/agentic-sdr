@@ -3,7 +3,7 @@ import { generateJson } from "@/lib/llm";
 import { describeFilters, hasFilters } from "@/lib/providers/up2data";
 import { resolveSkills } from "@/lib/skills/registry";
 import { renderProfile } from "@/lib/graphs/shared/prompts";
-import { emit } from "@/lib/streaming/runEvents";
+import { narrator } from "@/lib/graphs/shared/narrate";
 import type { ResearchState, ResearchUpdate } from "@/lib/graphs/research/state";
 
 /**
@@ -79,9 +79,16 @@ facet out rather than guessing at it.`;
  * vocabulary is a quiet advantage, since semantic search rewards it.
  */
 export async function planQueries(state: ResearchState): Promise<ResearchUpdate> {
-  await emit(state.runId, "node_start", { node: "plan_queries" });
+  const log = narrator(state.runId, "research");
+  await log.start("plan_queries");
 
   const skills = resolveSkills(state.skills, "research");
+  if (skills.names.length > 0) {
+    await log.progress("plan_queries", `skills in play: ${skills.names.join(", ")}`, {
+      skills: skills.names,
+      allowedTools: [...skills.allowedTools],
+    });
+  }
 
   // The control arm searches from the product name alone. This is the whole
   // point of the comparison view: the same loop, without the profile.
@@ -92,10 +99,8 @@ export async function planQueries(state: ResearchState): Promise<ResearchUpdate>
       `businesses looking for ${name}`,
       `${name} target customers`,
     ];
-    await emit(state.runId, "progress", {
-      node: "plan_queries",
-      label: "Planning search",
-      detail: "no profile (control arm)",
+    await log.end("plan_queries", `${queries.length} queries from the product name alone`, {
+      controlArm: true,
       queries,
     });
     // No facets for the control arm: the filters are an ICP restated, and the
@@ -121,14 +126,22 @@ ${renderProfile(state.profile)}`,
   // An all-empty filter object would be a paid search for "everyone".
   const linkedinFilters = hasFilters(result.linkedin) ? result.linkedin : undefined;
 
-  await emit(state.runId, "progress", {
-    node: "plan_queries",
-    label: "Planning search",
-    detail: result.reasoning,
+  // The reasoning is the decision itself, so it is recorded as reasoning and
+  // not buried in a progress line the feed overwrites next turn.
+  await log.reasoning("plan_queries", result.reasoning, {
     queries: result.queries,
     linkedin: linkedinFilters ? describeFilters(linkedinFilters) : undefined,
-    skills: skills.names,
   });
+  await log.end(
+    "plan_queries",
+    `${result.queries.length} queries` +
+      (linkedinFilters ? `, LinkedIn facets ${describeFilters(linkedinFilters)}` : ", no LinkedIn facets"),
+    {
+      queries: result.queries,
+      linkedin: linkedinFilters ? describeFilters(linkedinFilters) : undefined,
+      skills: skills.names,
+    }
+  );
 
   return { queries: result.queries, queriesTried: result.queries, linkedinFilters };
 }

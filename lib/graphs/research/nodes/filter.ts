@@ -1,4 +1,5 @@
 import { emit } from "@/lib/streaming/runEvents";
+import { narrator } from "@/lib/graphs/shared/narrate";
 import { recordCandidate } from "@/lib/db/queries";
 import { RELEVANCE_THRESHOLD, type ScoredCandidate } from "@/lib/types";
 import type { ResearchState, ResearchUpdate } from "@/lib/graphs/research/state";
@@ -9,7 +10,10 @@ import type { ResearchState, ResearchUpdate } from "@/lib/graphs/research/state"
  * which is what refine_queries reads to decide what to change.
  */
 export async function filter(state: ResearchState): Promise<ResearchUpdate> {
-  await emit(state.runId, "node_start", { node: "filter" });
+  const log = narrator(state.runId, "research");
+  await log.start("filter", `${state.scored.length} scored candidates`, {
+    count: state.scored.length,
+  });
 
   const survivors: ScoredCandidate[] = [];
   const rejectionReasons: Record<string, number> = {};
@@ -85,13 +89,27 @@ export async function filter(state: ResearchState): Promise<ResearchUpdate> {
     survivors.push(candidate);
   }
 
-  await emit(state.runId, "progress", {
-    node: "filter",
-    label: "Filtering",
-    detail: `${survivors.length} cleared the ${Math.round(RELEVANCE_THRESHOLD * 100)}% bar`,
-    survivors: survivors.length,
-    rejected: state.scored.length - survivors.length,
-  });
+  /**
+   * The rejection histogram is the input to refine_queries, so it is logged
+   * here rather than only there — when a run ends up somewhere strange, this is
+   * the line that explains what the loop was reacting to.
+   */
+  const topReasons = Object.entries(rejectionReasons)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([key, count]) => `${key} ×${count}`);
+
+  await log.end(
+    "filter",
+    `${survivors.length} cleared the ${Math.round(RELEVANCE_THRESHOLD * 100)}% bar, ` +
+      `${state.scored.length - survivors.length} dropped` +
+      (topReasons.length > 0 ? ` — mostly ${topReasons.join(", ")}` : ""),
+    {
+      survivors: survivors.length,
+      rejected: state.scored.length - survivors.length,
+      rejectionReasons,
+    }
+  );
 
   return { survivors, rejectionReasons, scored: [] };
 }

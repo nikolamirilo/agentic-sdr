@@ -4,6 +4,7 @@ import type { ResearchState } from "@/lib/graphs/research/state";
 import { createRun, finishRun, getCurrentProfile, updateRunProgress, type ResearchRun } from "@/lib/db/queries";
 import { loadSkills } from "@/lib/skills/registry";
 import { emit } from "@/lib/streaming/runEvents";
+import { narrator } from "@/lib/graphs/shared/narrate";
 import { env } from "@/lib/env";
 import { hasModelProvider } from "@/lib/llm";
 
@@ -109,17 +110,22 @@ async function execute(
   try {
     const skills = await loadSkills(skillIds);
 
-    await emit(run.id, "progress", {
-      node: "start",
-      label: "Starting",
-      detail: useProfile
+    const log = narrator(run.id, "research");
+    await log.start(
+      "start",
+      (useProfile
         ? `targeting ${run.targetCount} leads using profile v${profile?.version ?? "?"}`
-        : `targeting ${run.targetCount} leads with no profile (control arm)`,
-      target: run.targetCount,
-      useProfile,
-      skills: skills.map((s) => s.name),
-      budget: { candidates: run.budgetCandidates, seconds: run.budgetSeconds },
-    });
+        : `targeting ${run.targetCount} leads with no profile (control arm)`) +
+        ` — budget ${run.budgetCandidates} candidates / ${run.budgetSeconds}s` +
+        (skills.length > 0 ? `, skills: ${skills.map((s) => s.name).join(", ")}` : ", no skills"),
+      {
+        target: run.targetCount,
+        useProfile,
+        profileVersion: profile?.version,
+        skills: skills.map((s) => s.name),
+        budget: { candidates: run.budgetCandidates, seconds: run.budgetSeconds },
+      }
+    );
 
     const graph = researchGraph();
 
@@ -152,7 +158,7 @@ async function execute(
     await emitDone(final);
   } catch (error) {
     const message = (error as Error).message ?? String(error);
-    console.error(`[run ${run.id}] failed:`, message);
+    console.error(`[research ${run.id.slice(0, 8)}] ■ failed — ${message}`);
     await finishRun(run.id, "failed", message).catch(() => {});
     await emit(run.id, "error", { message, fatal: true }).catch(() => {});
   } finally {

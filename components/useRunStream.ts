@@ -34,6 +34,8 @@ export type NodeLine = {
   node: string;
   label: string;
   detail: string;
+  /** Human duration, present on the line a node closes with. */
+  took?: string;
   at: number;
 };
 
@@ -138,6 +140,7 @@ export function useRunStream(runId: string | undefined, initialTarget = 0): RunS
               node: str(payload.node, "step"),
               label: str(payload.label, str(payload.node, "step")),
               detail: str(payload.detail),
+              took: str(payload.took) || undefined,
               at: Date.now(),
             };
             // One line per node: the feed shows the latest state of each step,

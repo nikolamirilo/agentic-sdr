@@ -107,6 +107,11 @@ export function Step3Leads({
                 {running && stream.lines.at(-1)?.detail && (
                   <span className="ml-2 font-normal text-ink-2">{stream.lines.at(-1)?.detail}</span>
                 )}
+                {running && stream.lines.at(-1)?.took && (
+                  <span className="ml-2 font-normal tabular text-ink-3">
+                    {stream.lines.at(-1)?.took}
+                  </span>
+                )}
               </p>
             </div>
             <div className="flex items-center gap-2">

@@ -13,6 +13,7 @@ import {
   inputClass,
 } from "@/components/ui";
 import { StepFrame } from "@/components/wizard/StepFrame";
+import { readSse } from "@/components/readSse";
 
 export type OutreachMessage = {
   id: string;
@@ -27,6 +28,15 @@ export type OutreachMessage = {
 };
 
 export type GmailStatus = { configured: boolean; connectedEmail: string | null };
+
+/** One line of the live drafting feed: where this lead's draft has got to. */
+type DraftLine = {
+  leadId: string;
+  leadName: string;
+  label: string;
+  summary: string;
+  done: boolean;
+};
 
 /**
  * Nothing on this step sends on its own. Each draft waits on a LangGraph
@@ -55,6 +65,12 @@ export function Step4Outreach({
   const [drafting, setDrafting] = useState(false);
   const [error, setError] = useState("");
   const [skipped, setSkipped] = useState<string[]>([]);
+  /**
+   * What the graph is doing right now, per lead. Drafting a batch is minutes of
+   * model calls and the old spinner said nothing for all of it — which is
+   * indistinguishable from a hang, and the reason this step felt broken.
+   */
+  const [feed, setFeed] = useState<DraftLine[]>([]);
   const requested = useRef(false);
 
   const leadsById = new Map(leads.map((lead) => [lead.id, lead]));
@@ -83,17 +99,74 @@ export function Step4Outreach({
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ leadIds: missing }),
         });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error ?? "Drafting failed");
 
-        onMessagesChange(data.messages as OutreachMessage[]);
-
-        const failures = (data.drafted as Array<{ error?: string }>).filter((item) => item.error);
-        if (failures.length > 0) {
-          setError(
-            `${failures.length} of ${missing.length} could not be drafted: ${failures[0].error}`
-          );
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error ?? `Drafting failed (${response.status})`);
         }
+
+        await readSse(response, (event, data) => {
+          switch (event) {
+            case "lead_start":
+              setFeed((prev) => [
+                ...prev,
+                {
+                  leadId: String(data.leadId),
+                  leadName: String(data.leadName ?? "lead"),
+                  label: `Lead ${data.index} of ${data.total}`,
+                  summary: "",
+                  done: false,
+                },
+              ]);
+              break;
+
+            case "node":
+              // One line per lead: the feed shows where each draft has got to,
+              // not a transcript of every node it passed through.
+              setFeed((prev) =>
+                prev.map((line) =>
+                  line.leadId === data.leadId
+                    ? {
+                        ...line,
+                        label: String(data.label),
+                        summary: String(data.summary ?? ""),
+                      }
+                    : line
+                )
+              );
+              break;
+
+            case "lead_done":
+            case "lead_error":
+              setFeed((prev) =>
+                prev.map((line) =>
+                  line.leadId === data.leadId
+                    ? {
+                        ...line,
+                        done: true,
+                        label: event === "lead_error" ? "Could not draft" : "Ready for review",
+                        summary: String(data.error ?? line.summary),
+                      }
+                    : line
+                )
+              );
+              break;
+
+            case "done": {
+              onMessagesChange(data.messages as OutreachMessage[]);
+              const failures = (data.drafted as Array<{ error?: string }>).filter((i) => i.error);
+              if (failures.length > 0) {
+                setError(
+                  `${failures.length} of ${missing.length} could not be drafted: ${failures[0].error}`
+                );
+              }
+              break;
+            }
+
+            case "error":
+              throw new Error(String(data.message ?? "Drafting failed"));
+          }
+        });
       } catch (caught) {
         setError((caught as Error).message);
       } finally {
@@ -157,20 +230,35 @@ export function Step4Outreach({
 
       {drafting && relevant.length === 0 && (
         <div className="space-y-4">
-          {approved.slice(0, 2).map((leadId) => (
-            <Card key={leadId} padding="lg">
+          {(feed.length > 0
+            ? feed
+            : approved.slice(0, 2).map((leadId) => ({
+                leadId,
+                leadName: leadsById.get(leadId)?.fullName ?? "lead",
+                label: "Queued",
+                summary: "",
+                done: false,
+              }))
+          ).map((line) => (
+            <Card key={line.leadId} padding="lg">
               <div className="flex items-center gap-3">
-                <Spinner className="h-4 w-4 text-accent" />
-                <p className="text-[15px] font-medium">
-                  Writing to {leadsById.get(leadId)?.fullName ?? "lead"}…
-                </p>
+                {line.done ? (
+                  <Icon.Check className="h-4 w-4 text-accent" />
+                ) : (
+                  <Spinner className="h-4 w-4 text-accent" />
+                )}
+                <p className="text-[15px] font-medium">{line.leadName}</p>
+                <Pill tone="neutral">{line.label}</Pill>
               </div>
-              <div className="mt-5 space-y-2.5">
-                <div className="shimmer h-4 w-1/3 rounded-[6px]" />
-                <div className="shimmer h-4 w-full rounded-[6px]" />
-                <div className="shimmer h-4 w-5/6 rounded-[6px]" />
-                <div className="shimmer h-4 w-2/3 rounded-[6px]" />
-              </div>
+              {line.summary ? (
+                <p className="mt-3 text-[13px] leading-relaxed text-ink-2">{line.summary}</p>
+              ) : (
+                <div className="mt-5 space-y-2.5">
+                  <div className="shimmer h-4 w-1/3 rounded-[6px]" />
+                  <div className="shimmer h-4 w-full rounded-[6px]" />
+                  <div className="shimmer h-4 w-2/3 rounded-[6px]" />
+                </div>
+              )}
             </Card>
           ))}
         </div>

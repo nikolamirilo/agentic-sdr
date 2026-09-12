@@ -15,6 +15,7 @@ import {
   inputClass,
 } from "@/components/ui";
 import { StepFrame } from "@/components/wizard/StepFrame";
+import { readSse } from "@/components/readSse";
 
 export type ProductSummary = {
   id: string;
@@ -78,40 +79,20 @@ export function Step1Profile({
         throw new Error(data.error ?? `Generation failed (${response.status})`);
       }
 
-      // A POST cannot use EventSource, so the SSE frames are parsed by hand.
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const frames = buffer.split("\n\n");
-        buffer = frames.pop() ?? "";
-
-        for (const frame of frames) {
-          const eventLine = frame.split("\n").find((l) => l.startsWith("event: "));
-          const dataLine = frame.split("\n").find((l) => l.startsWith("data: "));
-          if (!eventLine || !dataLine) continue;
-
-          const event = eventLine.slice(7).trim();
-          const data = JSON.parse(dataLine.slice(6));
-
-          if (event === "node") {
-            setStatusText(data.label);
-            setLines((prev) => [
-              ...prev.filter((l) => l.node !== data.node),
-              { node: data.node, label: data.label, summary: data.summary ?? "" },
-            ]);
-          } else if (event === "done") {
-            onProfileChanged(data.profile);
-          } else if (event === "error") {
-            throw new Error(data.message ?? "Generation failed");
-          }
+      await readSse(response, (event, data) => {
+        if (event === "node") {
+          const node = String(data.node);
+          setStatusText(String(data.label));
+          setLines((prev) => [
+            ...prev.filter((l) => l.node !== node),
+            { node, label: String(data.label), summary: String(data.summary ?? "") },
+          ]);
+        } else if (event === "done") {
+          onProfileChanged(data.profile as ProductProfile);
+        } else if (event === "error") {
+          throw new Error(String(data.message ?? "Generation failed"));
         }
-      }
+      });
     } catch (caught) {
       if ((caught as Error).name !== "AbortError") setError((caught as Error).message);
     } finally {
