@@ -65,6 +65,28 @@ Hard rules:
 - No "I hope this finds you well", no "quick question", no "circling back".
 - Short. A cold email that needs scrolling does not get read.`;
 
+/**
+ * The shape of the output, stated in the user prompt so it sits after any
+ * skill instructions. Without it the model writes an account-research memo:
+ * no greeting, the company described in the third person, no sign-off.
+ */
+function emailFormat(fullName: string): string {
+  const firstName = fullName.trim().split(/\s+/)[0] ?? "";
+  return `# Format — this is a personal email from one person to another
+- The body starts with the greeting on its own line: "Hi ${firstName}," (if "${fullName}" is not a
+  person's name, use "Hello,"). A skill's "first sentence" means the first sentence after it.
+- Write to the recipient in the second person: "you", "your team", "your P&C core". Never describe
+  their company in the third person as if briefing someone else about it.
+- First person singular for the sender: "I", not "we" and not the product's name as the subject.
+- Plain sentences a person would type. No headline fragments, no colons or semicolons stitching
+  clauses together, no stacked product feature lists. Mention at most one or two capabilities.
+- Two to four short paragraphs separated by a blank line.
+- End with a question they can answer in one line, then a sign-off on its own line ("Best,").
+  Do not write a sender name or signature under it.
+- Subject: under 8 words, lowercase except proper nouns, reads like a colleague wrote it.
+  No colons, no title case, no clickbait.`;
+}
+
 /** Derives type, reason and benefit from the profile plus the lead's signal. */
 export async function decideAngle(state: OutreachState): Promise<OutreachUpdate> {
   const log = logFor(state);
@@ -153,7 +175,9 @@ ${
         .map((e) => `Subject: ${e.subject}\n${e.body}`)
         .join("\n\n---\n\n")}`
     : "# No example emails were provided. Keep it under 120 words."
-}`,
+}
+
+${emailFormat(state.lead.fullName)}`,
   });
 
   const words = result.body.trim().split(/\s+/).length;
@@ -185,8 +209,8 @@ export async function critique(state: OutreachState): Promise<OutreachUpdate> {
     schema: CritiqueSchema,
     runId: state.runId,
     temperature: 0,
-    system: `You review cold emails against three specific tests and nothing else. You are strict:
-a draft that would read as a template to its recipient fails.`,
+    system: `You review cold emails against four specific tests and nothing else. You are strict:
+a draft that would read as a template, or not as an email at all, fails.`,
     prompt: `Review this draft.
 
 Test 1 — domain language: does it use this market's own vocabulary rather than generic
@@ -198,8 +222,17 @@ Test 3 — tone and length: ${
         ? "does it match the supplied example emails?"
         : "is it under 120 words, with no filler openings?"
     }
+Test 4 — reads as an email: does the body open with a greeting line to ${
+      state.lead?.fullName ?? "the recipient"
+    }, speak to them as "you" rather than describing their company in the third person, use
+plain sentences instead of headline fragments or feature lists, and end with a question and a
+sign-off? A draft that reads like an account-research note fails, however accurate it is.
+Fold any failure here into matchesToneAndLength.
 
-Return pass: true only if all three pass. Otherwise list concrete fixes.
+Using domain vocabulary never justifies jargon stacking: a sentence the recipient would have to
+reread fails Test 1 as well.
+
+Return pass: true only if all four pass. Otherwise list concrete fixes.
 
 # Draft
 Subject: ${state.subject}
@@ -217,7 +250,7 @@ ${state.body}`,
   await log.end(
     "critique_draft",
     result.pass
-      ? "passed all three tests"
+      ? "passed all four tests"
       : `failed: ${result.fixes.join("; ")} → ` +
         (willRevise ? "revising" : "out of revisions, going to approval as-is"),
     { pass: result.pass, fixes: result.fixes, willRevise, revisions: state.revisions }
@@ -255,7 +288,9 @@ ${state.critique.fixes.map((f) => `- ${f}`).join("\n")}
 # Current draft
 Subject: ${state.subject}
 
-${state.body}`,
+${state.body}
+
+${emailFormat(state.lead?.fullName ?? "")}`,
   });
 
   const words = result.body.trim().split(/\s+/).length;

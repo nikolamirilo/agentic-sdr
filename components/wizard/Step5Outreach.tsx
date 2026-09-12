@@ -13,6 +13,7 @@ import {
   inputClass,
 } from "@/components/ui";
 import { StepFrame } from "@/components/wizard/StepFrame";
+import { readSse } from "@/components/readSse";
 
 export type OutreachMessage = {
   id: string;
@@ -54,7 +55,9 @@ export function Step5Outreach({
   selectedLeadIds: string[];
   messages: OutreachMessage[];
   gmail: GmailStatus;
-  onMessagesChange: (messages: OutreachMessage[]) => void;
+  onMessagesChange: (
+    messages: OutreachMessage[] | ((prev: OutreachMessage[]) => OutreachMessage[])
+  ) => void;
   onBack: () => void;
   onContinue: () => void;
 }) {
@@ -78,7 +81,17 @@ export function Step5Outreach({
   );
 
   function replace(next: OutreachMessage) {
-    onMessagesChange(messages.map((message) => (message.id === next.id ? next : message)));
+    onMessagesChange((prev) => prev.map((message) => (message.id === next.id ? next : message)));
+  }
+
+  /**
+   * A re-drafted lead gets a new message row on a new graph thread. The fresh
+   * rows go first, so the one-card-per-lead filter above picks them up; the old
+   * draft stays in history underneath.
+   */
+  function addDrafts(incoming: OutreachMessage[]) {
+    const ids = new Set(incoming.map((message) => message.id));
+    onMessagesChange((prev) => [...incoming, ...prev.filter((message) => !ids.has(message.id))]);
   }
 
   const sentCount = relevant.filter((message) => message.status === "sent").length;
@@ -142,6 +155,7 @@ export function Step5Outreach({
               productId={productId}
               canSend={gmail.configured && Boolean(gmail.connectedEmail)}
               onChanged={replace}
+              onRegenerated={addDrafts}
               onSkip={() => setSkipped((prev) => [...prev, message.id])}
             />
           );
@@ -187,6 +201,7 @@ function MessageCard({
   productId,
   canSend,
   onChanged,
+  onRegenerated,
   onSkip,
 }: {
   message: OutreachMessage;
@@ -194,12 +209,15 @@ function MessageCard({
   productId: string;
   canSend: boolean;
   onChanged: (message: OutreachMessage) => void;
+  onRegenerated: (messages: OutreachMessage[]) => void;
   onSkip: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [subject, setSubject] = useState(message.subject);
   const [body, setBody] = useState(message.body);
   const [busy, setBusy] = useState(false);
+  /** The node the re-draft is on, or null when not regenerating. */
+  const [regenerating, setRegenerating] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
 
@@ -230,6 +248,50 @@ function MessageCard({
       setError((caught as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Runs the outreach graph again for this one lead on a fresh thread. The new
+   * draft replaces this card when it lands, which also discards unsaved edits.
+   */
+  async function regenerate() {
+    setRegenerating("Starting");
+    setError("");
+    try {
+      const response = await fetch("/api/outreach", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ leadIds: [lead.id] }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error ?? `Re-generating failed (${response.status})`);
+      }
+
+      let incoming: OutreachMessage[] = [];
+      await readSse(response, (event, data) => {
+        switch (event) {
+          case "node":
+            setRegenerating(String(data.label ?? data.node));
+            break;
+          case "lead_error":
+            throw new Error(String(data.error ?? "Could not draft"));
+          case "error":
+            throw new Error(String(data.message ?? "Re-generating failed"));
+          case "done":
+            incoming = data.messages as OutreachMessage[];
+            break;
+        }
+      });
+
+      // Newest first, so the first row for this lead is the one just written.
+      const fresh = incoming.find((item) => item.leadId === lead.id);
+      if (!fresh || fresh.id === message.id) throw new Error("No new draft came back");
+      onRegenerated(incoming);
+    } catch (caught) {
+      setError((caught as Error).message);
+      setRegenerating(null);
     }
   }
 
@@ -337,6 +399,16 @@ function MessageCard({
                     Edit
                   </Button>
                 )}
+
+                <Button
+                  variant="secondary"
+                  onClick={regenerate}
+                  disabled={busy || regenerating !== null}
+                  title="Write this email again from scratch"
+                >
+                  {regenerating ? <Spinner className="h-4 w-4" /> : <Icon.Spark />}
+                  {regenerating ? `${regenerating}…` : "Re-generate"}
+                </Button>
 
                 <Button variant="ghost" onClick={onSkip}>
                   Skip

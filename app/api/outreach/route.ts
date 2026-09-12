@@ -201,7 +201,7 @@ function summarize(node: string, update: Partial<OutreachState>): string {
     case "critique_draft":
       if (!update.critique) return "";
       return update.critique.pass
-        ? "passed all three tests"
+        ? "passed all four tests"
         : `${update.critique.fixes.length} fixes: ${update.critique.fixes.join("; ")}`;
     case "await_approval":
       return update.messageId ? "draft saved, waiting for approval" : "";
