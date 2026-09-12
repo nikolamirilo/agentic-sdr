@@ -116,7 +116,7 @@ create table if not exists skills (
   product_id     uuid references products(id) on delete cascade,  -- null = global
   slug           text not null,
   name           text not null,
-  kind           text not null,           -- research | outreach
+  kinds          text[] not null default '{}',  -- any of: research, outreach
   instructions   text not null,
   tool_allowlist text[] not null default '{}',
   created_at     timestamptz not null default now()
@@ -221,3 +221,18 @@ where exists (
   select 1 from unnest(tool_allowlist) as t(name)
   where t.name like '%.%'
 );
+
+-- A skill used to be either research or outreach. It can now be marked for both,
+-- so the single `kind` column became a `kinds` array. Idempotent: once the old
+-- column is gone this block does nothing.
+alter table skills add column if not exists kinds text[] not null default '{}';
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = current_schema() and table_name = 'skills' and column_name = 'kind'
+  ) then
+    execute $sql$update skills set kinds = array[kind] where cardinality(kinds) = 0 and kind is not null$sql$;
+    execute $sql$alter table skills drop column kind$sql$;
+  end if;
+end $$;

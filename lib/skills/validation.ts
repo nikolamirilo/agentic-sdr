@@ -4,7 +4,8 @@ import { ALL_TOOLS } from "@/lib/skills/tools";
 /** The shape both /api/skills and /api/skills/[id] accept. */
 export const SkillBodySchema = z.object({
   name: z.string().trim().min(1).max(120),
-  kind: z.enum(["research", "outreach"]),
+  /** At least one; a skill marked for both runs in both halves. */
+  kinds: z.array(z.enum(["research", "outreach"])).min(1).transform((kinds) => [...new Set(kinds)]),
   instructions: z.string().trim().min(1).max(8000),
   toolAllowlist: z.array(z.enum(ALL_TOOLS)).default([]),
   /** Omit to create a global skill, offered for every product. */

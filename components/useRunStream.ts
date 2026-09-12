@@ -246,13 +246,34 @@ export function useRunStream(runId: string | undefined, initialTarget = 0): RunS
           }
           case "done": {
             const status = str(payload.status, "done");
+            // The terminal event is the authoritative tally: the loop reports
+            // its own elapsed time and spend rather than the last turn's.
+            const usage = payload.usage as
+              | { inputTokens?: number; outputTokens?: number; modelCalls?: number; toolCalls?: number }
+              | undefined;
+            const elapsed = num(payload.elapsedSeconds, -1);
+
             return {
               ...next,
               status: status === "partial" ? "partial" : status === "failed" ? "failed" : "done",
               stopReason: str(payload.reason) || next.stopReason,
               found: num(payload.found, next.found),
+              target: num(payload.target, next.target),
               examined: num(payload.examined, next.examined),
-              budgets: (payload.budgets as RunBudgets | undefined) ?? next.budgets,
+              iteration: num(payload.iterations, next.iteration),
+              budgets: {
+                ...next.budgets,
+                ...(elapsed >= 0
+                  ? { seconds: { used: elapsed, cap: next.budgets.seconds?.cap ?? 0 } }
+                  : {}),
+                ...(usage
+                  ? {
+                      tokens: (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0),
+                      modelCalls: usage.modelCalls,
+                      toolCalls: usage.toolCalls,
+                    }
+                  : {}),
+              },
               connected: false,
             };
           }

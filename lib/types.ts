@@ -148,7 +148,8 @@ export type Skill = {
   productId: string | null;
   slug: string;
   name: string;
-  kind: SkillKind;
+  /** A skill can be marked for research, for outreach, or for both. */
+  kinds: SkillKind[];
   instructions: string;
   toolAllowlist: string[];
 };

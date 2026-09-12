@@ -9,7 +9,7 @@ import type { SkillKind } from "@/lib/types";
 export type SkillSeed = {
   slug: string;
   name: string;
-  kind: SkillKind;
+  kinds: SkillKind[];
   instructions: string;
   toolAllowlist: string[];
 };
@@ -18,7 +18,7 @@ export const DEFAULT_SKILLS: SkillSeed[] = [
   {
     slug: "hiring-signals",
     name: "Find hiring signals",
-    kind: "research",
+    kinds: ["research"],
     toolAllowlist: ["exoSearch", "firecrawlSearch"],
     instructions: `Prioritise companies that are visibly hiring for roles adjacent to the problem this product solves.
 
@@ -30,7 +30,7 @@ export const DEFAULT_SKILLS: SkillSeed[] = [
   {
     slug: "tech-stack-fit",
     name: "Match on tech stack",
-    kind: "research",
+    kinds: ["research"],
     toolAllowlist: ["exoSearch", "firecrawlSearch"],
     instructions: `Qualify on observable tooling rather than on stated intent.
 
@@ -41,7 +41,7 @@ export const DEFAULT_SKILLS: SkillSeed[] = [
   {
     slug: "funding-and-growth",
     name: "Follow funding and growth",
-    kind: "research",
+    kinds: ["research"],
     toolAllowlist: ["exoSearch", "firecrawlSearch"],
     instructions: `Target companies in a spending window.
 
@@ -53,7 +53,7 @@ export const DEFAULT_SKILLS: SkillSeed[] = [
   {
     slug: "linkedin-buyers",
     name: "Source buyers on LinkedIn",
-    kind: "research",
+    kinds: ["research"],
     toolAllowlist: ["linkedinSearch", "exoSearch", "firecrawlSearch"],
     instructions: `Go after the person, not the company page.
 
@@ -69,7 +69,7 @@ export const DEFAULT_SKILLS: SkillSeed[] = [
   {
     slug: "signal-first-email",
     name: "Lead with the signal",
-    kind: "outreach",
+    kinds: ["outreach"],
     toolAllowlist: [],
     instructions: `Open on the specific thing you observed about this company, in the first sentence.
 
@@ -82,7 +82,7 @@ export const DEFAULT_SKILLS: SkillSeed[] = [
   {
     slug: "peer-proof",
     name: "Lead with peer proof",
-    kind: "outreach",
+    kinds: ["outreach"],
     toolAllowlist: [],
     instructions: `Open with a comparable company, then the outcome.
 

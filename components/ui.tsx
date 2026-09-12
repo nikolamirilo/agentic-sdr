@@ -139,6 +139,12 @@ export const Icon = {
       <circle cx="8" cy="17" r="2" />
     </Svg>
   ),
+  Gear: (p: IconProps) => (
+    <Svg {...p}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 3.5l1 2.2 2.4-.5 1 1.6-1.4 2 1.4 2-1 1.6-2.4-.5-1 2.2h-2l-1-2.2-2.4.5-1-1.6 1.4-2-1.4-2 1-1.6 2.4.5 1-2.2z" />
+    </Svg>
+  ),
 };
 
 /*
@@ -153,6 +159,10 @@ export const IconPlus = Icon.Plus;
 export const IconCheck = Icon.Check;
 export const IconSpark = Icon.Spark;
 export const IconExternal = Icon.External;
+export const IconGear = Icon.Gear;
+export const IconMail = Icon.Mail;
+export const IconWarning = Icon.Warning;
+export const IconTrash = Icon.Trash;
 
 /* --------------------------------------------------------------- buttons */
 

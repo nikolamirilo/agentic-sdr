@@ -51,9 +51,9 @@ export function Step2Research({
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
 
-  // Only research skills reach this loop; an outreach one would be resolved
+  // Only research skills reach this loop; an outreach-only one would be resolved
   // away and silently do nothing, so it is not offered here.
-  const researchSkills = skills.filter((skill) => skill.kind === "research");
+  const researchSkills = skills.filter((skill) => skill.kinds.includes("research"));
 
   // Derived rather than pruned on edit: a skill deleted from the manager drops
   // out of the run payload without any state to keep in step.

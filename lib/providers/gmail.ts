@@ -118,6 +118,81 @@ export async function connectedAccount(
   return { id: row.id, email: row.email, refreshToken: decrypt(row.refresh_token_enc) };
 }
 
+export type GmailAccountSummary = {
+  id: string;
+  productId: string;
+  productName: string;
+  email: string;
+  scope: string;
+  connectedAt: string;
+};
+
+/**
+ * Every connection, newest first, for the settings screen. Deliberately
+ * returns no token material: the settings page never needs it and a shape
+ * that cannot carry a secret cannot leak one into a serialized prop.
+ */
+export async function listAccounts(): Promise<GmailAccountSummary[]> {
+  const rows = await query<{
+    id: string;
+    product_id: string;
+    product_name: string;
+    email: string;
+    scope: string;
+    connected_at: Date;
+  }>(
+    `select g.id, g.product_id, p.name as product_name, g.email, g.scope, g.connected_at
+     from gmail_accounts g
+     join products p on p.id = g.product_id
+     order by g.connected_at desc`
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    productId: row.product_id,
+    productName: row.product_name,
+    email: row.email,
+    scope: row.scope,
+    connectedAt: row.connected_at.toISOString(),
+  }));
+}
+
+/**
+ * Tells Google to forget the grant. Best effort on purpose: the row is gone
+ * either way, and a failed revoke must not leave a connection that the UI
+ * claims is removed but that still has a live refresh token behind it.
+ */
+async function revoke(refreshToken: string): Promise<void> {
+  try {
+    await resilient({ label: "gmail.revoke", retries: 0 }, async (signal) => {
+      await fetch("https://oauth2.googleapis.com/revoke", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ token: refreshToken }),
+        signal,
+      });
+    });
+  } catch {
+    // Nothing to log here that is not either useless or token-adjacent.
+  }
+}
+
+/** Deletes the stored connection and revokes the grant. Returns the address it removed. */
+export async function disconnectAccount(accountId: string): Promise<string | undefined> {
+  const row = await queryOne<{ email: string; refresh_token_enc: Buffer }>(
+    `delete from gmail_accounts where id = $1 returning email, refresh_token_enc`,
+    [accountId]
+  );
+  if (!row) return undefined;
+
+  // Decryption can fail if TOKEN_ENCRYPTION_KEY was rotated; the row is still gone.
+  try {
+    await revoke(decrypt(row.refresh_token_enc));
+  } catch {
+    /* ignore */
+  }
+  return row.email;
+}
+
 // --- sending --------------------------------------------------------------
 
 function encodeHeader(value: string): string {
