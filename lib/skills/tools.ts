@@ -46,9 +46,12 @@ export const TOOL_ACTIONS: Record<ToolName, Array<{ action: string; summary: str
   contactLookup: [{ action: "email", summary: "Resolve a work email and phone" }],
 };
 
-/** Only research runs call tools; outreach drafting never does. */
-export function toolsApplyTo(kind: string): boolean {
-  return kind === "research";
+/**
+ * Only research runs call tools; outreach drafting never does. A skill marked
+ * for both still carries an allowlist, because its research half uses it.
+ */
+export function toolsApplyTo(kinds: readonly string[]): boolean {
+  return kinds.includes("research");
 }
 
 /**

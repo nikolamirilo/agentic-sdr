@@ -2,7 +2,7 @@ import { z } from "zod";
 import { generateJson } from "@/lib/llm";
 import { resolveSkills } from "@/lib/skills/registry";
 import { renderProfile } from "@/lib/graphs/shared/prompts";
-import { emit } from "@/lib/streaming/runEvents";
+import { narrator } from "@/lib/graphs/shared/narrate";
 import type { ResearchState, ResearchUpdate } from "@/lib/graphs/research/state";
 
 /**
@@ -38,7 +38,10 @@ You are given the reasons candidates were rejected. Read them as a diagnosis:
 Never repeat a query that has already been tried.`;
 
 export async function refineQueries(state: ResearchState): Promise<ResearchUpdate> {
-  await emit(state.runId, "node_start", { node: "refine_queries" });
+  const log = narrator(state.runId, "research");
+  await log.start("refine_queries", `turn ${state.iterations} produced ${state.found.length} of ${state.targetCount}`, {
+    iteration: state.iterations,
+  });
 
   const skills = resolveSkills(state.skills, "research");
 
@@ -66,10 +69,8 @@ export async function refineQueries(state: ResearchState): Promise<ResearchUpdat
   // rephrases. That it plateaus is the point of the comparison.
   if (!state.useProfile || !state.profile) {
     const queries = state.queries.map((q, i) => `${q} (variant ${state.iterations + i + 1})`);
-    await emit(state.runId, "progress", {
-      node: "refine_queries",
-      label: "Refining search",
-      detail: "no profile to reason from (control arm), rephrasing only",
+    await log.end("refine_queries", "no profile to reason from (control arm) — rephrasing only", {
+      controlArm: true,
       queries,
     });
     return { queries, queriesTried: queries, lastRefinement: "rephrased without a profile" };
@@ -103,22 +104,30 @@ Write the next 3 to 5 queries.`,
     ? `${result.reasoning} (changed segment)`
     : result.reasoning;
 
-  await emit(state.runId, "progress", {
-    node: "refine_queries",
-    label: "Refining search",
-    detail: refinement,
-    diagnosis: result.diagnosis,
-    changedSegment: result.changedSegment,
-    queries,
-    found: state.found.length,
-    target: state.targetCount,
-  });
-  await emit(state.runId, "reasoning", {
-    node: "refine_queries",
+  // The diagnosis is the single most audit-worthy thing the loop produces: it
+  // is the difference between an agent and a for loop, and it is what a run
+  // that drifted off target has to be explained by afterwards.
+  await log.reasoning("refine_queries", result.diagnosis, {
     diagnosis: result.diagnosis,
     decision: refinement,
+    changedSegment: result.changedSegment,
     queries,
   });
+
+  const reused = result.queries.length - fresh.length;
+  await log.end(
+    "refine_queries",
+    `${refinement} — ${queries.length} new queries` +
+      (reused > 0 ? `, ${reused} rejected as already tried` : ""),
+    {
+      diagnosis: result.diagnosis,
+      changedSegment: result.changedSegment,
+      queries,
+      queriesRejected: reused,
+      found: state.found.length,
+      target: state.targetCount,
+    }
+  );
 
   return { queries, queriesTried: queries, lastRefinement: refinement };
 }

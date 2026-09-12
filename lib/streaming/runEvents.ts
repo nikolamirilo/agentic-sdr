@@ -36,6 +36,22 @@ export async function emit(
   return undefined;
 }
 
+/**
+ * Whether anything has ever been written for this id.
+ *
+ * Research runs have a `research_runs` row to authorise the stream against.
+ * An outreach drafting session has no such row — it is a session, not a run —
+ * but it writes the same events, so the existence of its events is what says
+ * the id is real.
+ */
+export async function hasRunEvents(runId: string): Promise<boolean> {
+  const rows = await query<{ one: number }>(
+    `select 1 as one from run_events where run_id = $1::uuid limit 1`,
+    [runId]
+  );
+  return rows.length > 0;
+}
+
 export async function readEventsSince(runId: string, afterSeq: number, limit = 200): Promise<RunEvent[]> {
   const rows = await query<{
     id: string;

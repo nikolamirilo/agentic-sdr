@@ -1,7 +1,7 @@
 import { describeFilters } from "@/lib/providers/up2data";
 import { resolveSkills } from "@/lib/skills/registry";
 import { mapWithLimit, DEFAULT_CONCURRENCY } from "@/lib/providers/resilience";
-import { emit } from "@/lib/streaming/runEvents";
+import { narrator } from "@/lib/graphs/shared/narrate";
 import { canUseTool, runTool, toolContext } from "@/lib/tools";
 import { normalizeDomain } from "@/lib/identity";
 import type { RawCandidate } from "@/lib/types";
@@ -26,7 +26,11 @@ const LINKEDIN_RESULT_LIMIT = 25;
  * job today. Dedupe sorts out the rare candidate found by both.
  */
 export async function discover(state: ResearchState): Promise<ResearchUpdate> {
-  await emit(state.runId, "node_start", { node: "discover" });
+  const log = narrator(state.runId, "research");
+  await log.start("discover", `turn ${state.iterations + 1}, ${state.queries.length} queries`, {
+    iteration: state.iterations + 1,
+    queries: state.queries,
+  });
 
   const skills = resolveSkills(state.skills, "research");
   const tools = toolContext({
@@ -36,6 +40,9 @@ export async function discover(state: ResearchState): Promise<ResearchUpdate> {
   });
   const errors: string[] = [];
   const candidates: RawCandidate[] = [];
+  // Counted per source so the feed can say where the candidates came from.
+  // "40 candidates" is not actionable; "34 from Exa, 6 from LinkedIn" is.
+  const bySource: Record<string, number> = {};
 
   // Never search our own domain back at ourselves.
   const ownDomain = normalizeDomain(state.profile?.icp.exampleCustomerUrls?.[0]);
@@ -53,13 +60,22 @@ export async function discover(state: ResearchState): Promise<ResearchUpdate> {
         tools
       )
     );
-    results.forEach((result, index) => {
+    // Awaited in order, so every query's line lands before the node's closing
+    // one. Fire-and-forget emits race the `seq` counter and read as out of order.
+    for (const [index, result] of results.entries()) {
       if (!result.ok) {
         errors.push(`discover: "${state.queries[index]}" failed (${(result.error as Error).message})`);
-        return;
+        await log.fail("discover", result.error, { query: state.queries[index], source: "exa" });
+        continue;
       }
+      bySource.exa = (bySource.exa ?? 0) + result.value.length;
+      await log.progress("discover", `"${state.queries[index]}" returned ${result.value.length}`, {
+        query: state.queries[index],
+        source: "exa",
+        count: result.value.length,
+      });
       candidates.push(...result.value);
-    });
+    }
   }
 
   // LinkedIn people search. Facets come from plan_queries and stay put across
@@ -76,16 +92,16 @@ export async function discover(state: ResearchState): Promise<ResearchUpdate> {
         tools
       );
       candidates.push(...people);
-      await emit(state.runId, "progress", {
-        node: "discover",
-        label: "Discovering",
-        detail: `LinkedIn: ${people.length} people matching ${describeFilters(state.linkedinFilters)}`,
-        source: "linkedin",
-        count: people.length,
-      });
+      bySource.linkedin = people.length;
+      await log.progress(
+        "discover",
+        `LinkedIn returned ${people.length} people matching ${describeFilters(state.linkedinFilters)}`,
+        { source: "linkedin", count: people.length }
+      );
     } catch (error) {
       // A dead LinkedIn search must not cost us the Exa results already in hand.
       errors.push(`discover: linkedin search failed (${(error as Error).message})`);
+      await log.fail("discover", error, { source: "linkedin" });
     }
   }
 
@@ -101,7 +117,15 @@ export async function discover(state: ResearchState): Promise<ResearchUpdate> {
       runTool({ tool: "exoSearch", action: "findSimilar", url, limit: PER_QUERY_LIMIT }, tools)
     );
     for (const result of similar) {
-      if (result.ok) candidates.push(...result.value);
+      if (!result.ok) continue;
+      bySource.findSimilar = (bySource.findSimilar ?? 0) + result.value.length;
+      candidates.push(...result.value);
+    }
+    if (bySource.findSimilar) {
+      await log.progress("discover", `${bySource.findSimilar} lookalikes of the example customers`, {
+        source: "findSimilar",
+        count: bySource.findSimilar,
+      });
     }
   }
 
@@ -113,12 +137,19 @@ export async function discover(state: ResearchState): Promise<ResearchUpdate> {
   }
   const queue = [...bySourceUrl.values()];
 
-  await emit(state.runId, "progress", {
-    node: "discover",
-    label: "Discovering",
-    detail: `${queue.length} candidates from ${state.queries.length} queries`,
-    count: queue.length,
-  });
+  const breakdown = Object.entries(bySource)
+    .map(([source, count]) => `${count} from ${source}`)
+    .join(", ");
+  const carried = state.candidateQueue.length;
+
+  await log.end(
+    "discover",
+    `${queue.length} in the queue` +
+      (breakdown ? ` — ${breakdown}` : " — nothing found") +
+      (carried > 0 ? `, ${carried} carried over` : "") +
+      `, ${candidates.length + carried - queue.length} duplicate URLs dropped`,
+    { count: queue.length, bySource, carried, errors: errors.length }
+  );
 
   return { candidateQueue: queue, errors };
 }

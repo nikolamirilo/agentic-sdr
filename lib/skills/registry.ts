@@ -15,8 +15,8 @@ import type { Skill, SkillKind } from "@/lib/types";
 
 /**
  * Skills are resolved once at graph entry. Their instructions are concatenated
- * into the system prompt of the nodes their kind maps to, and the tool layer
- * filters available tools to the union of the allowlists.
+ * into the system prompt of the nodes each of their kinds maps to, and the tool
+ * layer filters available tools to the union of the allowlists.
  */
 
 export { ALL_TOOLS };
@@ -32,7 +32,8 @@ export type ResolvedSkills = {
 };
 
 export function resolveSkills(skills: Skill[], kind: SkillKind): ResolvedSkills {
-  const relevant = skills.filter((skill) => skill.kind === kind);
+  // A skill marked for both kinds contributes to both halves of the run.
+  const relevant = skills.filter((skill) => skill.kinds.includes(kind));
   const allowed = new Set<string>();
   for (const skill of relevant) for (const tool of skill.toolAllowlist) allowed.add(tool);
   if (allowed.size === 0) for (const tool of ALL_TOOLS) allowed.add(tool);
@@ -79,7 +80,7 @@ export async function seedDefaultSkills(): Promise<number> {
 
 export type SkillInput = {
   name: string;
-  kind: SkillKind;
+  kinds: SkillKind[];
   instructions: string;
   toolAllowlist: string[];
   /** null keeps the skill global, i.e. offered for every product. */
@@ -106,7 +107,7 @@ export async function createSkill(input: SkillInput): Promise<Skill> {
     productId: input.productId,
     slug: slugify(input.name),
     name: input.name,
-    kind: input.kind,
+    kinds: input.kinds,
     instructions: input.instructions,
     toolAllowlist: normaliseTools(input.toolAllowlist),
   });
@@ -120,7 +121,7 @@ export async function updateSkill(
     // Renaming re-derives the slug so the handle never contradicts the name.
     slug: patch.name === undefined ? undefined : slugify(patch.name),
     name: patch.name,
-    kind: patch.kind,
+    kinds: patch.kinds,
     instructions: patch.instructions,
     toolAllowlist: patch.toolAllowlist ? normaliseTools(patch.toolAllowlist) : undefined,
   });

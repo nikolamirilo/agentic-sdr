@@ -28,7 +28,7 @@ export async function POST(request: Request) {
 
     const skill = await createSkill({
       name: parsed.data.name,
-      kind: parsed.data.kind,
+      kinds: parsed.data.kinds,
       instructions: parsed.data.instructions,
       toolAllowlist: parsed.data.toolAllowlist,
       productId,

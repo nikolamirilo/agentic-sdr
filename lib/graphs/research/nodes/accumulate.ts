@@ -1,4 +1,5 @@
 import { emit } from "@/lib/streaming/runEvents";
+import { narrator } from "@/lib/graphs/shared/narrate";
 import {
   insertLead,
   recordBillingEvent,
@@ -13,7 +14,10 @@ import type { ResearchState, ResearchUpdate } from "@/lib/graphs/research/state"
  * emit a `lead` run event so the browser sees it the moment it lands.
  */
 export async function accumulate(state: ResearchState): Promise<ResearchUpdate> {
-  await emit(state.runId, "node_start", { node: "accumulate" });
+  const log = narrator(state.runId, "research");
+  await log.start("accumulate", `${state.survivors.length} qualified this turn`, {
+    survivors: state.survivors.length,
+  });
 
   const found: Lead[] = [];
   const remaining = Math.max(0, state.targetCount - state.found.length);
@@ -42,7 +46,13 @@ export async function accumulate(state: ResearchState): Promise<ResearchUpdate> 
 
     // A null return means another run inserted this identity first. That is the
     // unique index doing its job, not an error.
-    if (!lead) continue;
+    if (!lead) {
+      await log.progress("accumulate", `${name} was claimed by another run first`, {
+        identityKey: candidate.identityKey,
+        skipped: "duplicate",
+      });
+      continue;
+    }
 
     await recordCandidate({
       runId: state.runId,
@@ -81,14 +91,18 @@ export async function accumulate(state: ResearchState): Promise<ResearchUpdate> 
     examinedCount: state.examinedCount,
   });
 
-  await emit(state.runId, "progress", {
-    node: "accumulate",
-    label: "Qualifying",
-    detail: `found ${totalFound} of ${state.targetCount}`,
-    found: totalFound,
-    target: state.targetCount,
-    examined: state.examinedCount,
-  });
+  const dropped = state.survivors.length - found.length;
+  await log.end(
+    "accumulate",
+    `+${found.length} qualified — ${totalFound} of ${state.targetCount} found` +
+      (dropped > 0 ? `, ${dropped} over target or already claimed` : ""),
+    {
+      added: found.length,
+      found: totalFound,
+      target: state.targetCount,
+      examined: state.examinedCount,
+    }
+  );
 
   return { found, survivors: [] };
 }

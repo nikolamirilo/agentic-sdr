@@ -1,6 +1,6 @@
 import { computeIdentityKey, normalizeDomain } from "@/lib/identity";
 import { findSeenIdentityKeys, recordCandidate } from "@/lib/db/queries";
-import { emit } from "@/lib/streaming/runEvents";
+import { narrator } from "@/lib/graphs/shared/narrate";
 import type { RawCandidate } from "@/lib/types";
 import type { EnrichedCandidate, ResearchState, ResearchUpdate } from "@/lib/graphs/research/state";
 
@@ -51,7 +51,10 @@ function looksLikeJunk(candidate: RawCandidate): { junk: boolean; reason?: strin
 }
 
 export async function dedupe(state: ResearchState): Promise<ResearchUpdate> {
-  await emit(state.runId, "node_start", { node: "dedupe" });
+  const log = narrator(state.runId, "research");
+  await log.start("dedupe", `${state.candidateQueue.length} to check`, {
+    incoming: state.candidateQueue.length,
+  });
 
   const keyed: Array<{ candidate: RawCandidate; identityKey: string }> = [];
   let junked = 0;
@@ -123,18 +126,28 @@ export async function dedupe(state: ResearchState): Promise<ResearchUpdate> {
   const alreadyPending = new Set(state.pending.map((c) => c.identityKey));
   const pending = [...state.pending, ...survivors.filter((c) => !alreadyPending.has(c.identityKey))];
 
-  await emit(state.runId, "progress", {
-    node: "dedupe",
-    label: "Deduping",
-    detail: `${survivors.length} new, ${excluded + alreadyExamined} already seen, ${junked + unkeyed} filtered out`,
-    counts: {
-      new: survivors.length,
-      seen: excluded,
-      alreadyExamined,
-      junk: junked,
-      unidentifiable: unkeyed,
-    },
-  });
+  /**
+   * Spelled out rather than summed, because this node is the one that decides
+   * what the run does *not* pay for. `excluded` is money saved on people already
+   * in the system; `junk` is money saved on pages that were never prospects.
+   * Both are worth seeing.
+   */
+  await log.end(
+    "dedupe",
+    `${survivors.length} new to enrich — ${excluded} on the exclusion list, ` +
+      `${alreadyExamined} already seen this run, ${junked} aggregators or navigation, ` +
+      `${unkeyed} with no usable identity`,
+    {
+      counts: {
+        new: survivors.length,
+        excluded,
+        alreadyExamined,
+        junk: junked,
+        unidentifiable: unkeyed,
+      },
+      pendingAfter: pending.length,
+    }
+  );
 
   return { pending, candidateQueue: [], seenKeys: survivors.map((c) => c.identityKey) };
 }

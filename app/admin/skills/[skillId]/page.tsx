@@ -47,9 +47,13 @@ export default async function EditSkillPage(props: PageProps<"/admin/skills/[ski
             </div>
             <h1 className="display text-ink">{skill.name}</h1>
             <div className="mt-4 flex flex-wrap items-center gap-2">
-              <Pill tone={skill.kind === "research" ? "info" : "accent"}>
-                {skill.kind === "research" ? "Research" : "Outreach"}
-              </Pill>
+              {(["research", "outreach"] as const)
+                .filter((kind) => skill.kinds.includes(kind))
+                .map((kind) => (
+                  <Pill key={kind} tone={kind === "research" ? "info" : "accent"}>
+                    {kind === "research" ? "Research" : "Outreach"}
+                  </Pill>
+                ))}
               <Pill>{skill.slug}</Pill>
             </div>
             <p className="subhead mt-4">

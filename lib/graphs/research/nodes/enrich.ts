@@ -2,7 +2,7 @@ import { z } from "zod";
 import { isLinkedInProfileUrl, renderProfileText } from "@/lib/providers/up2data";
 import { resolveSkills } from "@/lib/skills/registry";
 import { mapWithLimit, DEFAULT_CONCURRENCY } from "@/lib/providers/resilience";
-import { emit } from "@/lib/streaming/runEvents";
+import { narrator } from "@/lib/graphs/shared/narrate";
 import { canUseTool, runTool, toolContext } from "@/lib/tools";
 import { computeIdentityKey } from "@/lib/identity";
 import { recordCandidate } from "@/lib/db/queries";
@@ -43,7 +43,8 @@ const CandidateExtractSchema = z.object({
 const BATCH_SIZE = 20;
 
 export async function enrich(state: ResearchState): Promise<ResearchUpdate> {
-  await emit(state.runId, "node_start", { node: "enrich" });
+  const log = narrator(state.runId, "research");
+  await log.start("enrich");
 
   const skills = resolveSkills(state.skills, "research");
   const tools = toolContext({
@@ -57,20 +58,41 @@ export async function enrich(state: ResearchState): Promise<ResearchUpdate> {
   const batch = state.pending.slice(0, Math.min(BATCH_SIZE, remainingBudget));
 
   if (batch.length === 0) {
+    await log.end("enrich", "nothing left to enrich within the candidate budget", {
+      remainingBudget,
+      pending: state.pending.length,
+    });
     return { enriched: [], examinedCount: 0 };
   }
 
-  await emit(state.runId, "progress", {
-    node: "enrich",
-    label: "Enriching",
-    detail: `${batch.length} in flight`,
-    inFlight: batch.length,
-  });
+  await log.progress(
+    "enrich",
+    `reading ${batch.length} pages (${state.pending.length - batch.length} still queued, ` +
+      `${remainingBudget} left in the candidate budget)`,
+    { inFlight: batch.length, queued: state.pending.length - batch.length, remainingBudget }
+  );
 
   const canScrape = canUseTool(tools, "firecrawlSearch");
   const canLookUpContacts = canUseTool(tools, "contactLookup");
   // One grant covers reading profiles and companies alike.
   const canUseLinkedIn = canUseTool(tools, "linkedinSearch");
+
+  /**
+   * Enrichment is the longest node in the loop by a wide margin — a batch of
+   * pages read at a concurrency cap, each one a network round trip. Reporting
+   * only at the end means minutes of silence, which reads as a hung run. So each
+   * candidate reports as it lands, with a running count.
+   */
+  let done = 0;
+  const tick = async (candidate: EnrichedCandidate, detail: string) => {
+    done += 1;
+    await log.progress("enrich", `[${done}/${batch.length}] ${detail}`, {
+      done,
+      total: batch.length,
+      identityKey: candidate.identityKey,
+      company: candidate.company,
+    });
+  };
 
   const results = await mapWithLimit(batch, DEFAULT_CONCURRENCY, async (candidate) => {
     let pageText = candidate.snippet ?? "";
@@ -201,6 +223,13 @@ export async function enrich(state: ResearchState): Promise<ResearchUpdate> {
       }
     }
 
+    await tick(
+      merged,
+      `${merged.company ?? merged.fullName ?? merged.sourceUrl}` +
+        (memberUrl ? " (LinkedIn)" : "") +
+        (merged.contactResolved ? " — contact resolved" : " — no contact")
+    );
+
     return merged;
   });
 
@@ -214,6 +243,7 @@ export async function enrich(state: ResearchState): Promise<ResearchUpdate> {
       unresolved += 1;
       const message = (result.error as Error).message;
       errors.push(`enrich: ${candidate.sourceUrl} failed (${message})`);
+      await log.fail("enrich", result.error, { sourceUrl: candidate.sourceUrl });
       await recordCandidate({
         runId: state.runId,
         productId: state.productId,
@@ -228,14 +258,18 @@ export async function enrich(state: ResearchState): Promise<ResearchUpdate> {
     enriched.push(result.value);
   }
 
-  await emit(state.runId, "progress", {
-    node: "enrich",
-    label: "Enriching",
-    detail: `${enriched.length} enriched, ${unresolved} unresolved`,
-    enriched: enriched.length,
-    unresolved,
-    contactsResolved: enriched.filter((c) => c.contactResolved).length,
-  });
+  const withContact = enriched.filter((c) => c.contactResolved).length;
+  await log.end(
+    "enrich",
+    `${enriched.length} enriched (${withContact} with a contact), ${unresolved} unreadable`,
+    {
+      enriched: enriched.length,
+      unresolved,
+      contactsResolved: withContact,
+      examined: state.examinedCount + batch.length,
+      budgetCandidates: state.budget.maxCandidates,
+    }
+  );
 
   // The candidates we did not take this turn stay queued for the next one.
   return {

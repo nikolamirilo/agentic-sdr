@@ -34,22 +34,59 @@ export type NodeLine = {
   node: string;
   label: string;
   detail: string;
+  /** Human duration, present on the line a node closes with. */
+  took?: string;
   at: number;
+};
+
+/**
+ * Every cap the loop is running against, as `check_done` reports them at the
+ * end of each turn. It records all of them every turn, whether or not one is
+ * the cap that fires, which is what makes "why did it stop" answerable — and,
+ * while the run is still going, "how close is it to stopping".
+ */
+export type RunBudgets = {
+  leads?: { used: number; cap: number };
+  candidates?: { used: number; cap: number };
+  seconds?: { used: number; cap: number };
+  turns?: { used: number; cap: number };
+  tokens?: number;
+  modelCalls?: number;
+  toolCalls?: number;
 };
 
 export type RunStreamState = {
   connected: boolean;
   lines: NodeLine[];
+  /**
+   * Every line in arrival order, unlike `lines` which keeps one per node.
+   * The loop revisits the same nine nodes turn after turn, so the collapsed
+   * view cannot show that it has been round three times.
+   */
+  trail: NodeLine[];
   leads: LeadCard[];
   found: number;
   target: number;
   examined: number;
+  /** Which turn of the loop is in flight, 1-based. */
+  iteration: number;
+  budgets: RunBudgets;
   status: "running" | "done" | "partial" | "failed";
   stopReason?: string;
   error?: string;
   reasoning: Array<{ diagnosis: string; decision: string; queries: string[] }>;
   rejections: Array<{ company?: string; reason: string; relevance?: number }>;
+  /**
+   * Failures the loop absorbed: a dead URL, a page that would not parse. They
+   * are not run-ending by design, but a run that quietly ate thirty of them is
+   * a different run from one that ate none.
+   */
+  warnings: Array<{ node: string; label: string; message: string }>;
 };
+
+/** The trail is a live view, not an archive; the tail is the useful part. */
+const TRAIL_LIMIT = 60;
+const WARNING_LIMIT = 20;
 
 const storageKey = (runId: string) => `sdr.run.${runId}.seq`;
 
@@ -81,13 +118,17 @@ export function useRunStream(runId: string | undefined, initialTarget = 0): RunS
   const [state, setState] = useState<RunStreamState>({
     connected: false,
     lines: [],
+    trail: [],
     leads: [],
     found: 0,
     target: initialTarget,
     examined: 0,
+    iteration: 0,
+    budgets: {},
     status: "running",
     reasoning: [],
     rejections: [],
+    warnings: [],
   });
 
   const seenRef = useRef<Set<number>>(new Set());
@@ -97,13 +138,17 @@ export function useRunStream(runId: string | undefined, initialTarget = 0): RunS
     setState({
       connected: false,
       lines: [],
+      trail: [],
       leads: [],
       found: 0,
       target: initialTarget,
       examined: 0,
+      iteration: 0,
+      budgets: {},
       status: "running",
       reasoning: [],
       rejections: [],
+      warnings: [],
     });
   }, [initialTarget]);
 
@@ -133,22 +178,36 @@ export function useRunStream(runId: string | undefined, initialTarget = 0): RunS
         const next = { ...prev, connected: true };
 
         switch (kind) {
+          // A node closing and a tick from inside one render identically; the
+          // closing line simply carries a duration.
+          case "node_end":
           case "progress": {
             const line: NodeLine = {
               node: str(payload.node, "step"),
               label: str(payload.label, str(payload.node, "step")),
               detail: str(payload.detail),
+              took: str(payload.took) || undefined,
               at: Date.now(),
             };
             // One line per node: the feed shows the latest state of each step,
             // not a transcript of every tick.
             const lines = [...next.lines.filter((l) => l.node !== line.node), line];
+
+            // `node_end` is the machine-readable twin of the `progress` line a
+            // node closes with, so counting it here would double every entry.
+            const trail =
+              kind === "node_end" ? next.trail : [...next.trail, line].slice(-TRAIL_LIMIT);
+
             return {
               ...next,
               lines,
+              trail,
               found: num(payload.found, next.found),
               target: num(payload.target, next.target),
               examined: num(payload.examined, next.examined),
+              iteration: num(payload.iteration, next.iteration),
+              // Only check_done carries these, once a turn.
+              budgets: (payload.budgets as RunBudgets | undefined) ?? next.budgets,
             };
           }
           case "lead": {
@@ -187,16 +246,49 @@ export function useRunStream(runId: string | undefined, initialTarget = 0): RunS
           }
           case "done": {
             const status = str(payload.status, "done");
+            // The terminal event is the authoritative tally: the loop reports
+            // its own elapsed time and spend rather than the last turn's.
+            const usage = payload.usage as
+              | { inputTokens?: number; outputTokens?: number; modelCalls?: number; toolCalls?: number }
+              | undefined;
+            const elapsed = num(payload.elapsedSeconds, -1);
+
             return {
               ...next,
               status: status === "partial" ? "partial" : status === "failed" ? "failed" : "done",
               stopReason: str(payload.reason) || next.stopReason,
               found: num(payload.found, next.found),
+              target: num(payload.target, next.target),
+              examined: num(payload.examined, next.examined),
+              iteration: num(payload.iterations, next.iteration),
+              budgets: {
+                ...next.budgets,
+                ...(elapsed >= 0
+                  ? { seconds: { used: elapsed, cap: next.budgets.seconds?.cap ?? 0 } }
+                  : {}),
+                ...(usage
+                  ? {
+                      tokens: (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0),
+                      modelCalls: usage.modelCalls,
+                      toolCalls: usage.toolCalls,
+                    }
+                  : {}),
+              },
               connected: false,
             };
           }
           case "error": {
-            if (payload.fatal === false) return next;
+            if (payload.fatal === false) {
+              // Absorbed, not fatal — but counted, so it is not invisible.
+              const node = str(payload.node, "step");
+              return {
+                ...next,
+                warnings: [
+                  ...next.warnings,
+                  { node, label: str(payload.label, node), message: str(payload.detail) || str(payload.message) },
+                ].slice(-WARNING_LIMIT),
+              };
+            }
             return { ...next, status: "failed", error: str(payload.message, "the run failed") };
           }
           default:
@@ -205,7 +297,17 @@ export function useRunStream(runId: string | undefined, initialTarget = 0): RunS
       });
     };
 
-    const kinds = ["progress", "lead", "candidate", "reasoning", "node_start", "done", "error", "open"];
+    const kinds = [
+      "progress",
+      "node_start",
+      "node_end",
+      "lead",
+      "candidate",
+      "reasoning",
+      "done",
+      "error",
+      "open",
+    ];
     const handlers = kinds.map((kind) => {
       const handler = (raw: MessageEvent) => apply(kind, raw);
       source.addEventListener(kind, handler as EventListener);

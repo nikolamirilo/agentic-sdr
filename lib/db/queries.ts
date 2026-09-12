@@ -583,7 +583,7 @@ type SkillRow = {
   product_id: string | null;
   slug: string;
   name: string;
-  kind: SkillKind;
+  kinds: SkillKind[];
   instructions: string;
   tool_allowlist: string[];
 };
@@ -593,18 +593,18 @@ const toSkill = (row: SkillRow): Skill => ({
   productId: row.product_id,
   slug: row.slug,
   name: row.name,
-  kind: row.kind,
+  kinds: row.kinds ?? [],
   instructions: row.instructions,
   toolAllowlist: row.tool_allowlist ?? [],
 });
 
 export async function listSkills(kind?: SkillKind, productId?: string): Promise<Skill[]> {
   const rows = await query<SkillRow>(
-    `select id, product_id, slug, name, kind, instructions, tool_allowlist
+    `select id, product_id, slug, name, kinds, instructions, tool_allowlist
      from skills
      where (product_id is null or product_id = $1)
-       and ($2::text is null or kind = $2)
-     order by kind, name`,
+       and ($2::text is null or $2::text = any(kinds))
+     order by name`,
     [productId ?? null, kind ?? null]
   );
   return rows.map(toSkill);
@@ -613,7 +613,7 @@ export async function listSkills(kind?: SkillKind, productId?: string): Promise<
 export async function getSkillsByIds(ids: string[]): Promise<Skill[]> {
   if (ids.length === 0) return [];
   const rows = await query<SkillRow>(
-    `select id, product_id, slug, name, kind, instructions, tool_allowlist
+    `select id, product_id, slug, name, kinds, instructions, tool_allowlist
      from skills where id = any($1::uuid[])`,
     [ids]
   );
@@ -630,18 +630,18 @@ export type SkillWithProduct = Skill & { productName: string | null };
  */
 export async function listAllSkills(): Promise<SkillWithProduct[]> {
   const rows = await query<SkillRow & { product_name: string | null }>(
-    `select s.id, s.product_id, s.slug, s.name, s.kind, s.instructions, s.tool_allowlist,
+    `select s.id, s.product_id, s.slug, s.name, s.kinds, s.instructions, s.tool_allowlist,
             p.name as product_name
      from skills s
      left join products p on p.id = s.product_id
-     order by s.kind, s.name`
+     order by s.name`
   );
   return rows.map((row) => ({ ...toSkill(row), productName: row.product_name }));
 }
 
 export async function getSkill(id: string): Promise<Skill | undefined> {
   const row = await queryOne<SkillRow>(
-    `select id, product_id, slug, name, kind, instructions, tool_allowlist
+    `select id, product_id, slug, name, kinds, instructions, tool_allowlist
      from skills where id = $1`,
     [id]
   );
@@ -665,15 +665,15 @@ export async function markSkillSeeded(slug: string): Promise<void> {
 export async function insertDefaultSkill(input: {
   slug: string;
   name: string;
-  kind: SkillKind;
+  kinds: SkillKind[];
   instructions: string;
   toolAllowlist: string[];
 }): Promise<void> {
   await query(
-    `insert into skills (product_id, slug, name, kind, instructions, tool_allowlist)
+    `insert into skills (product_id, slug, name, kinds, instructions, tool_allowlist)
      values (null, $1, $2, $3, $4, $5)
      on conflict (slug) where product_id is null do nothing`,
-    [input.slug, input.name, input.kind, input.instructions, input.toolAllowlist]
+    [input.slug, input.name, input.kinds, input.instructions, input.toolAllowlist]
   );
 }
 
@@ -681,19 +681,19 @@ export async function createSkill(input: {
   productId: string | null;
   slug: string;
   name: string;
-  kind: SkillKind;
+  kinds: SkillKind[];
   instructions: string;
   toolAllowlist: string[];
 }): Promise<Skill> {
   const row = await queryOne<SkillRow>(
-    `insert into skills (product_id, slug, name, kind, instructions, tool_allowlist)
+    `insert into skills (product_id, slug, name, kinds, instructions, tool_allowlist)
      values ($1, $2, $3, $4, $5, $6)
-     returning id, product_id, slug, name, kind, instructions, tool_allowlist`,
+     returning id, product_id, slug, name, kinds, instructions, tool_allowlist`,
     [
       input.productId,
       input.slug,
       input.name,
-      input.kind,
+      input.kinds,
       input.instructions,
       input.toolAllowlist,
     ]
@@ -707,7 +707,7 @@ export async function updateSkill(
   patch: {
     slug?: string;
     name?: string;
-    kind?: SkillKind;
+    kinds?: SkillKind[];
     instructions?: string;
     toolAllowlist?: string[];
   }
@@ -716,16 +716,16 @@ export async function updateSkill(
     `update skills set
        slug           = coalesce($2::text, slug),
        name           = coalesce($3::text, name),
-       kind           = coalesce($4::text, kind),
+       kinds          = coalesce($4::text[], kinds),
        instructions   = coalesce($5::text, instructions),
        tool_allowlist = coalesce($6::text[], tool_allowlist)
      where id = $1
-     returning id, product_id, slug, name, kind, instructions, tool_allowlist`,
+     returning id, product_id, slug, name, kinds, instructions, tool_allowlist`,
     [
       id,
       patch.slug ?? null,
       patch.name ?? null,
-      patch.kind ?? null,
+      patch.kinds ?? null,
       patch.instructions ?? null,
       patch.toolAllowlist ?? null,
     ]

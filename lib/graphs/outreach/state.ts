@@ -4,6 +4,13 @@ import type { Angle, Critique, Lead, ProductProfile, Skill } from "@/lib/types";
 export const OutreachStateAnnotation = Annotation.Root({
   leadId: Annotation<string>,
   productId: Annotation<string>,
+  /**
+   * The drafting session this lead belongs to. One session covers the whole
+   * batch the operator asked for, so every lead's nodes narrate into the same
+   * `run_events` stream and the UI tails one feed rather than N. Optional: the
+   * graph still runs without it, just without a stream to write to.
+   */
+  runId: Annotation<string | undefined>,
   /** One checkpoint thread per drafting attempt, so re-drafting starts clean. */
   threadId: Annotation<string>,
   lead: Annotation<Lead | undefined>,

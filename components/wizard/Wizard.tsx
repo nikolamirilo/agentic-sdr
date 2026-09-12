@@ -53,7 +53,13 @@ export function Wizard({ initial }: { initial: WizardInitialState }) {
   const [runId, setRunId] = useState<string | null>(initial.runId);
   const [targetCount, setTargetCount] = useState(initial.targetCount);
   const [leads, setLeads] = useState<Lead[]>(initial.leads);
-  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
+  /*
+   * Seeded from the drafts that already exist, so landing on step four after a
+   * refresh shows the messages that were written rather than an empty step.
+   */
+  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>(() =>
+    Array.from(new Set(initial.messages.map((message) => message.leadId)))
+  );
   const [messages, setMessages] = useState<OutreachMessage[]>(initial.messages);
 
   /** Keeps the address bar honest without triggering a server round-trip. */
@@ -182,7 +188,8 @@ export function Wizard({ initial }: { initial: WizardInitialState }) {
           <Step3Leads
             runId={runId ?? undefined}
             targetCount={targetCount}
-            initialLeads={leads}
+            leads={leads}
+            onLeadsChange={setLeads}
             selected={selectedLeadIds}
             onSelectedChange={setSelectedLeadIds}
             onBack={() => goTo(2)}

@@ -3,6 +3,7 @@ import { interrupt } from "@langchain/langgraph";
 import { generateJson } from "@/lib/llm";
 import { resolveSkills } from "@/lib/skills/registry";
 import { renderProfile } from "@/lib/graphs/shared/prompts";
+import { narrator } from "@/lib/graphs/shared/narrate";
 import { AngleSchema, CritiqueSchema, DraftSchema } from "@/lib/types";
 import {
   getCurrentProfile,
@@ -14,10 +15,44 @@ import {
 import { sendEmail } from "@/lib/providers/gmail";
 import type { OutreachState, OutreachUpdate } from "@/lib/graphs/outreach/state";
 
+/**
+ * Every node narrates through here. One drafting session covers a batch of
+ * leads, so the lead is carried on every line — a feed of "Writing the draft"
+ * with nothing attached is unreadable once there is more than one.
+ */
+const logFor = (state: OutreachState) =>
+  narrator(state.runId, "outreach", {
+    leadId: state.leadId,
+    leadName: state.lead?.fullName,
+    company: state.lead?.company ?? undefined,
+  });
+
 export async function loadContext(state: OutreachState): Promise<OutreachUpdate> {
+  const log = logFor(state);
+  await log.start("load_context");
+
   const lead = state.lead ?? (await getLead(state.leadId));
-  if (!lead) return { errors: [`load_context: lead ${state.leadId} not found`] };
+  if (!lead) {
+    await log.fail("load_context", `lead ${state.leadId} not found`);
+    return { errors: [`load_context: lead ${state.leadId} not found`] };
+  }
   const profile = state.profile ?? (await getCurrentProfile(lead.productId));
+
+  await log.end(
+    "load_context",
+    `${lead.fullName}${lead.company ? ` at ${lead.company}` : ""} — ` +
+      (profile ? `profile v${profile.version}` : "no profile, the angle will be thin") +
+      (lead.email ? "" : ", no email on file"),
+    {
+      leadName: lead.fullName,
+      company: lead.company,
+      profileVersion: profile?.version,
+      hasEmail: Boolean(lead.email),
+      signal: lead.signal,
+      relevance: lead.relevance,
+    }
+  );
+
   return { lead, profile, productId: lead.productId };
 }
 
@@ -32,16 +67,27 @@ Hard rules:
 
 /** Derives type, reason and benefit from the profile plus the lead's signal. */
 export async function decideAngle(state: OutreachState): Promise<OutreachUpdate> {
-  if (!state.lead) return { errors: ["decide_angle: no lead"] };
+  const log = logFor(state);
+  await log.start("decide_angle");
+
+  if (!state.lead) {
+    await log.fail("decide_angle", "no lead in state");
+    return { errors: ["decide_angle: no lead"] };
+  }
 
   // A user override is a decision, not a suggestion: it goes in as-is.
   if (state.angleOverride?.type && state.angleOverride.reason && state.angleOverride.benefit) {
+    await log.end("decide_angle", `operator override: ${state.angleOverride.type}`, {
+      overridden: true,
+      angle: state.angleOverride,
+    });
     return { angle: state.angleOverride as z.infer<typeof AngleSchema> };
   }
 
   const skills = resolveSkills(state.skills, "outreach");
   const angle = await generateJson({
     schema: AngleSchema,
+    runId: state.runId,
     system: skills.instructions ? `${SYSTEM}\n\n# Active skills\n${skills.instructions}` : SYSTEM,
     prompt: `Choose the angle for this email.
 
@@ -60,17 +106,32 @@ ${state.profile ? renderProfile(state.profile) : "(no profile available)"}
 ${state.angleOverride ? `The operator asked for: ${JSON.stringify(state.angleOverride)}` : ""}`,
   });
 
+  // The angle is the profile earning its keep: type, reason and benefit are
+  // derived rather than asked of the user, so they are worth showing.
+  await log.end("decide_angle", `${angle.type} — ${angle.reason}`, {
+    angle,
+    derivedFrom: state.profile ? `profile v${state.profile.version}` : "no profile",
+    skills: skills.names,
+  });
+
   return { angle };
 }
 
 export async function draft(state: OutreachState): Promise<OutreachUpdate> {
-  if (!state.lead || !state.angle) return { errors: ["draft: missing lead or angle"] };
+  const log = logFor(state);
+  await log.start("draft");
+
+  if (!state.lead || !state.angle) {
+    await log.fail("draft", "missing lead or angle");
+    return { errors: ["draft: missing lead or angle"] };
+  }
 
   const skills = resolveSkills(state.skills, "outreach");
   const examples = state.profile?.exampleEmails ?? [];
 
   const result = await generateJson({
     schema: DraftSchema,
+    runId: state.runId,
     temperature: 0.7,
     system: skills.instructions ? `${SYSTEM}\n\n# Active skills\n${skills.instructions}` : SYSTEM,
     prompt: `Write the email.
@@ -95,6 +156,13 @@ ${
 }`,
   });
 
+  const words = result.body.trim().split(/\s+/).length;
+  await log.end("draft", `"${result.subject}" — ${words} words`, {
+    subject: result.subject,
+    words,
+    examplesUsed: examples.length,
+  });
+
   return { subject: result.subject, body: result.body };
 }
 
@@ -103,12 +171,19 @@ ${
  * reference the actual signal, does it match the examples in tone and length.
  */
 export async function critique(state: OutreachState): Promise<OutreachUpdate> {
-  if (!state.body) return { errors: ["critique: nothing to critique"] };
+  const log = logFor(state);
+  await log.start("critique_draft");
+
+  if (!state.body) {
+    await log.fail("critique_draft", "nothing to critique");
+    return { errors: ["critique: nothing to critique"] };
+  }
 
   const terms = state.profile?.domainLanguage.terms.map((t) => t.term) ?? [];
 
   const result = await generateJson({
     schema: CritiqueSchema,
+    runId: state.runId,
     temperature: 0,
     system: `You review cold emails against three specific tests and nothing else. You are strict:
 a draft that would read as a template to its recipient fails.`,
@@ -132,6 +207,22 @@ Subject: ${state.subject}
 ${state.body}`,
   });
 
+  /**
+   * The routing decision is taken in `routeAfterCritique`, which is sync and
+   * cannot log. So it is spelled out here instead — a critique that fails on the
+   * last allowed revision still goes to approval, and that is exactly the case
+   * an operator would otherwise mistake for the fixes having been applied.
+   */
+  const willRevise = !result.pass && state.revisions < 1;
+  await log.end(
+    "critique_draft",
+    result.pass
+      ? "passed all three tests"
+      : `failed: ${result.fixes.join("; ")} → ` +
+        (willRevise ? "revising" : "out of revisions, going to approval as-is"),
+    { pass: result.pass, fixes: result.fixes, willRevise, revisions: state.revisions }
+  );
+
   return { critique: result };
 }
 
@@ -142,11 +233,18 @@ export function routeAfterCritique(state: OutreachState): "revise" | "await_appr
 }
 
 export async function revise(state: OutreachState): Promise<OutreachUpdate> {
-  if (!state.body || !state.critique) return { errors: ["revise: nothing to revise"] };
+  const log = logFor(state);
+  await log.start("revise", `${state.critique?.fixes.length ?? 0} fixes to apply`);
+
+  if (!state.body || !state.critique) {
+    await log.fail("revise", "nothing to revise");
+    return { errors: ["revise: nothing to revise"] };
+  }
 
   const skills = resolveSkills(state.skills, "outreach");
   const result = await generateJson({
     schema: DraftSchema,
+    runId: state.runId,
     temperature: 0.5,
     system: skills.instructions ? `${SYSTEM}\n\n# Active skills\n${skills.instructions}` : SYSTEM,
     prompt: `Apply these fixes and return the whole email again. Change only what the fixes ask for.
@@ -160,6 +258,13 @@ Subject: ${state.subject}
 ${state.body}`,
   });
 
+  const words = result.body.trim().split(/\s+/).length;
+  await log.end("revise", `rewritten — "${result.subject}", ${words} words`, {
+    subject: result.subject,
+    words,
+    fixes: state.critique.fixes,
+  });
+
   return { subject: result.subject, body: result.body, revisions: 1 };
 }
 
@@ -168,6 +273,9 @@ ${state.body}`,
  * the checkpointer, the UI posts approval, and the graph resumes at send.
  */
 export async function awaitApproval(state: OutreachState): Promise<OutreachUpdate> {
+  const log = logFor(state);
+  await log.start("await_approval");
+
   // Idempotent: this node runs again from the top when the graph resumes.
   const message = await upsertDraftMessage({
     leadId: state.leadId,
@@ -176,6 +284,13 @@ export async function awaitApproval(state: OutreachState): Promise<OutreachUpdat
     body: state.body ?? "",
     angle: state.angle ?? { type: "unknown", reason: "", benefit: "" },
     critique: state.critique,
+  });
+
+  // The line the feed ends on for a drafting run: everything past here happens
+  // in a *later* request, after a person has looked at the draft.
+  await log.progress("await_approval", "draft saved, waiting for the operator", {
+    messageId: message.id,
+    subject: message.subject,
   });
 
   const decision = interrupt<
@@ -191,9 +306,18 @@ export async function awaitApproval(state: OutreachState): Promise<OutreachUpdat
   const subject = decision.subject ?? state.subject;
   const body = decision.body ?? state.body;
 
-  if (decision.subject || decision.body) {
+  const edited = Boolean(decision.subject || decision.body);
+  if (edited) {
     await updateMessage(message.id, { subject, body });
   }
+
+  await log.end(
+    "await_approval",
+    decision.approved
+      ? `approved${edited ? " with operator edits" : ""}`
+      : "rejected by the operator",
+    { approved: decision.approved, edited, notes: decision.notes, messageId: message.id }
+  );
 
   return {
     messageId: message.id,
@@ -209,11 +333,18 @@ export function routeAfterApproval(state: OutreachState): "send" | "__end__" {
 }
 
 export async function send(state: OutreachState): Promise<OutreachUpdate> {
-  if (!state.messageId || !state.lead) return { errors: ["send: no message to send"] };
+  const log = logFor(state);
+  await log.start("send");
+
+  if (!state.messageId || !state.lead) {
+    await log.fail("send", "no message to send");
+    return { errors: ["send: no message to send"] };
+  }
 
   if (!state.lead.email) {
     const error = "lead has no resolved email address";
     await updateMessage(state.messageId, { status: "failed", error });
+    await log.fail("send", error, { messageId: state.messageId });
     return { sendError: error };
   }
 
@@ -231,12 +362,18 @@ export async function send(state: OutreachState): Promise<OutreachUpdate> {
       sentAt: true,
     });
     await setLeadOutcome(state.leadId, "contacted");
+    await log.end("send", `sent to ${state.lead.email}`, {
+      to: state.lead.email,
+      gmailMessageId: result.gmailMessageId,
+      messageId: state.messageId,
+    });
     return { gmailMessageId: result.gmailMessageId };
   } catch (error) {
     // Mark failed with the error and do not retry blindly: a duplicate cold
     // email is worse than a missing one.
     const message = (error as Error).message;
     await updateMessage(state.messageId, { status: "failed", error: message });
+    await log.fail("send", message, { to: state.lead.email, messageId: state.messageId });
     return { sendError: message };
   }
 }

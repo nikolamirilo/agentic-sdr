@@ -3,7 +3,7 @@ import { generateJson } from "@/lib/llm";
 import { resolveSkills } from "@/lib/skills/registry";
 import { renderCriteria, renderProfile } from "@/lib/graphs/shared/prompts";
 import { mapWithLimit, DEFAULT_CONCURRENCY } from "@/lib/providers/resilience";
-import { emit } from "@/lib/streaming/runEvents";
+import { narrator } from "@/lib/graphs/shared/narrate";
 import { recordCandidate } from "@/lib/db/queries";
 import { RELEVANCE_THRESHOLD, type CriterionAnswer, type ScoredCandidate } from "@/lib/types";
 import type { ResearchState, ResearchUpdate } from "@/lib/graphs/research/state";
@@ -62,8 +62,14 @@ function evidenceFor(candidate: ScoredCandidate & { pageText?: string }): string
 }
 
 export async function score(state: ResearchState): Promise<ResearchUpdate> {
-  await emit(state.runId, "node_start", { node: "score" });
-  if (state.enriched.length === 0) return { scored: [] };
+  const log = narrator(state.runId, "research");
+  await log.start("score", `${state.enriched.length} candidates`, {
+    count: state.enriched.length,
+  });
+  if (state.enriched.length === 0) {
+    await log.end("score", "nothing enriched this turn to score");
+    return { scored: [] };
+  }
 
   const profile = state.profile;
   const skills = resolveSkills(state.skills, "research");
@@ -86,8 +92,30 @@ export async function score(state: ResearchState): Promise<ResearchUpdate> {
   const totalWeight = criteria.reduce((sum, c) => sum + c.weight, 0);
   const measureWeight = measureCriteria.reduce((sum, c) => sum + c.weight, 0);
 
+  await log.progress(
+    "score",
+    gateOnCriteria
+      ? `answering ${criteria.length} weighted criteria per candidate`
+      : "no profile: one plausibility call per candidate (control arm)",
+    { criteria: criteria.length, gateOnCriteria }
+  );
+
+  // One model call per candidate, so this node reports per candidate too — and
+  // the line carries the score, which is the number the operator is auditing.
+  let done = 0;
+  const tick = async (name: string, relevance: number, met: number, total: number) => {
+    done += 1;
+    await log.progress(
+      "score",
+      `[${done}/${state.enriched.length}] ${name} — ${Math.round(relevance * 100)}%` +
+        (total > 0 ? ` (${met}/${total} criteria met)` : ""),
+      { done, total: state.enriched.length, relevance, criteriaMet: met, criteriaTotal: total }
+    );
+  };
+
   const results = await mapWithLimit(state.enriched, DEFAULT_CONCURRENCY, async (candidate) => {
     const enrichedForPrompt = candidate as unknown as ScoredCandidate & { pageText?: string };
+    const name = candidate.company ?? candidate.fullName ?? candidate.sourceUrl;
 
     if (!gateOnCriteria) {
       // The gate: all a system without a profile can ask.
@@ -128,6 +156,8 @@ ${evidenceFor(enrichedForPrompt)}`,
         relevance = measured.relevance;
       }
 
+      await tick(name, relevance, answers.filter((a) => a.met).length, measureCriteria.length);
+
       return {
         candidate,
         answers,
@@ -147,6 +177,13 @@ ${evidenceFor(enrichedForPrompt)}`,
       totalWeight
     );
 
+    await tick(
+      name,
+      scoredResult.relevance,
+      scoredResult.answers.filter((a) => a.met).length,
+      criteria.length
+    );
+
     return {
       candidate,
       answers: scoredResult.answers,
@@ -164,6 +201,7 @@ ${evidenceFor(enrichedForPrompt)}`,
     const candidate = state.enriched[index];
     if (!result.ok) {
       errors.push(`score: ${candidate.sourceUrl} failed (${(result.error as Error).message})`);
+      await log.fail("score", result.error, { sourceUrl: candidate.sourceUrl });
       await recordCandidate({
         runId: state.runId,
         productId: state.productId,
@@ -190,15 +228,22 @@ ${evidenceFor(enrichedForPrompt)}`,
     (c) => c.accepted ?? c.relevance >= RELEVANCE_THRESHOLD
   ).length;
 
-  await emit(state.runId, "progress", {
-    node: "score",
-    label: "Scoring",
-    detail: `${qualified} above the bar, ${scored.length - qualified} below`,
-    scored: scored.length,
-    qualified,
-    threshold: RELEVANCE_THRESHOLD,
-    distribution: scored.map((c) => c.relevance),
-  });
+  const distribution = scored.map((c) => c.relevance);
+  const average =
+    distribution.length > 0 ? distribution.reduce((a, b) => a + b, 0) / distribution.length : 0;
+
+  await log.end(
+    "score",
+    `${qualified} of ${scored.length} above the ${Math.round(RELEVANCE_THRESHOLD * 100)}% bar ` +
+      `(average ${Math.round(average * 100)}%)`,
+    {
+      scored: scored.length,
+      qualified,
+      threshold: RELEVANCE_THRESHOLD,
+      average: Number(average.toFixed(3)),
+      distribution,
+    }
+  );
 
   return { scored, errors };
 }

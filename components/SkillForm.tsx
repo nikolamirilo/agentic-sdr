@@ -16,6 +16,13 @@ import { Button, Card, Checkbox, Field, Icon, Notice, Spinner, inputClass } from
 
 const KIND_LABEL: Record<SkillKind, string> = { research: "Research", outreach: "Outreach" };
 
+const KIND_HINT: Record<SkillKind, string> = {
+  research: "How the loop finds and scores",
+  outreach: "How the email is written",
+};
+
+const ALL_KINDS: SkillKind[] = ["research", "outreach"];
+
 export function SkillForm({
   skill,
   products,
@@ -30,7 +37,9 @@ export function SkillForm({
   const creating = !skill;
 
   const [name, setName] = useState(skill?.name ?? "");
-  const [kind, setKind] = useState<SkillKind>(skill?.kind ?? "research");
+  const [kinds, setKinds] = useState<SkillKind[]>(
+    skill?.kinds?.length ? ALL_KINDS.filter((item) => skill.kinds.includes(item)) : ["research"]
+  );
   const [instructions, setInstructions] = useState(skill?.instructions ?? "");
   const [tools, setTools] = useState<string[]>(skill?.toolAllowlist ?? []);
   const [productId, setProductId] = useState<string | null>(skill?.productId ?? null);
@@ -39,7 +48,19 @@ export function SkillForm({
   const [error, setError] = useState("");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
-  const canSubmit = Boolean(name.trim() && instructions.trim());
+  // Both halves may be ticked, but a skill nothing is ticked for would never be
+  // resolved into a run, so at least one is required.
+  const canSubmit = Boolean(name.trim() && instructions.trim() && kinds.length > 0);
+
+  // Kept in ALL_KINDS order so "Research + Outreach" never reads back reversed.
+  const toggleKind = (kind: SkillKind) =>
+    setKinds((prev) =>
+      prev.includes(kind)
+        ? prev.filter((item) => item !== kind)
+        : ALL_KINDS.filter((item) => item === kind || prev.includes(item))
+    );
+
+  const research = kinds.includes("research");
 
   async function submit() {
     setBusy(true);
@@ -47,10 +68,10 @@ export function SkillForm({
     try {
       const body = {
         name: name.trim(),
-        kind,
+        kinds,
         instructions: instructions.trim(),
-        // An outreach skill never reaches the tool layer, so it saves empty.
-        toolAllowlist: toolsApplyTo(kind) ? tools : [],
+        // An outreach-only skill never reaches the tool layer, so it saves empty.
+        toolAllowlist: toolsApplyTo(kinds) ? tools : [],
       };
 
       const response = await fetch(creating ? "/api/skills" : `/api/skills/${skill.id}`, {
@@ -115,29 +136,31 @@ export function SkillForm({
 
           <div>
             <span className="mb-1.5 block text-[13px] font-medium text-ink">Applies to</span>
+            <p className="mb-3 text-[13px] leading-relaxed text-ink-3">
+              Tick both to use the same instructions in the research loop and in the drafting nodes.
+            </p>
             <div className="flex gap-2">
-              {(["research", "outreach"] as const).map((option) => (
+              {ALL_KINDS.map((option) => (
                 <button
                   key={option}
                   type="button"
                   disabled={busy}
-                  onClick={() => setKind(option)}
-                  aria-pressed={kind === option}
+                  onClick={() => toggleKind(option)}
+                  aria-pressed={kinds.includes(option)}
                   className={`flex-1 rounded-[10px] border px-4 py-2.5 text-left transition-colors ${
-                    kind === option
+                    kinds.includes(option)
                       ? "border-accent bg-accent-tint text-ink"
                       : "border-line-strong bg-surface text-ink-2 hover:bg-surface-sunken"
                   }`}
                 >
                   <span className="block text-[14px] font-medium">{KIND_LABEL[option]}</span>
-                  <span className="mt-0.5 block text-[12px] text-ink-3">
-                    {option === "research"
-                      ? "How the loop finds and scores"
-                      : "How the email is written"}
-                  </span>
+                  <span className="mt-0.5 block text-[12px] text-ink-3">{KIND_HINT[option]}</span>
                 </button>
               ))}
             </div>
+            {kinds.length === 0 && (
+              <p className="mt-2 text-[12px] text-ink-3">Pick at least one, or it never runs.</p>
+            )}
           </div>
 
           <Field
@@ -153,14 +176,14 @@ export function SkillForm({
               disabled={busy}
               onChange={(event) => setInstructions(event.target.value)}
               placeholder={
-                kind === "research"
+                research
                   ? "Target companies in a spending window.\n\n- Weight recent funding rounds and headcount growth.\n- Recency matters more than size."
                   : "Open on the specific thing you observed about this company.\n\n- Sentence one is the signal.\n- Under 120 words."
               }
             />
           </Field>
 
-          {toolsApplyTo(kind) ? (
+          {toolsApplyTo(kinds) ? (
             <div>
               <span className="mb-1.5 block text-[13px] font-medium text-ink">Tools</span>
               <p className="mb-3 text-[13px] leading-relaxed text-ink-3">
@@ -194,7 +217,8 @@ export function SkillForm({
             </div>
           ) : (
             <Notice tone="neutral">
-              Outreach drafting does not call tools, so an outreach skill is its instructions alone.
+              Outreach drafting does not call tools, so an outreach-only skill is its instructions
+              alone.
             </Notice>
           )}
 
@@ -241,19 +265,19 @@ export function SkillForm({
         <Card padding="md">
           <h2 className="text-[14px] font-semibold">Where this lands</h2>
           <p className="mt-2 text-[13px] leading-relaxed text-ink-2">
-            {kind === "research"
-              ? "The instructions join the system prompt of the planning, search and scoring nodes. Tools ticked here are the only ones those nodes may call."
-              : "The instructions join the system prompt of the drafting and critique nodes, alongside the product profile."}
+            {whereThisLands(kinds)}
           </p>
           <dl className="mt-5 space-y-2.5 border-t border-line pt-4 text-[13px]">
             <div className="flex justify-between gap-3">
-              <dt className="text-ink-3">Kind</dt>
-              <dd className="font-medium">{KIND_LABEL[kind]}</dd>
+              <dt className="text-ink-3">Applies to</dt>
+              <dd className="font-medium">
+                {kinds.length === 0 ? "—" : kinds.map((item) => KIND_LABEL[item]).join(" + ")}
+              </dd>
             </div>
             <div className="flex justify-between gap-3">
               <dt className="text-ink-3">Tools allowed</dt>
               <dd className="tabular font-medium">
-                {!toolsApplyTo(kind) ? "—" : tools.length === 0 ? "All" : tools.length}
+                {!toolsApplyTo(kinds) ? "—" : tools.length === 0 ? "All" : tools.length}
               </dd>
             </div>
             {!creating && (
@@ -295,4 +319,15 @@ export function SkillForm({
       </aside>
     </div>
   );
+}
+
+/** Both halves ticked means the instructions land in both sets of nodes. */
+function whereThisLands(kinds: SkillKind[]): string {
+  const research =
+    "The instructions join the system prompt of the planning, search and scoring nodes. Tools ticked here are the only ones those nodes may call.";
+  const outreach =
+    "The instructions join the system prompt of the drafting and critique nodes, alongside the product profile.";
+  if (kinds.includes("research") && kinds.includes("outreach")) return `${research} ${outreach}`;
+  if (kinds.includes("outreach")) return outreach;
+  return research;
 }
